@@ -2,12 +2,13 @@ import { issueHashFor } from './utils/issue-url.js';
 import { debug } from './utils/logging.js';
 
 /**
- * Hash-based router for tabs (issues/epics/board) and deep-linked issue ids.
+ * Hash-based router for tabs (issues/epics/board/integrations) and deep-linked
+ * issue ids.
  */
 
 /**
  * Parse an application hash and extract the selected issue id.
- * Supports canonical form "#/(issues|epics|board)?issue=<id>" and legacy
+ * Supports canonical form "#/(issues|epics|board|integrations)?issue=<id>" and legacy
  * "#/issue/<id>" which we will rewrite to the canonical form.
  *
  * @param {string} hash
@@ -35,7 +36,7 @@ export function parseHash(hash) {
  * Parse the current view from hash.
  *
  * @param {string} hash
- * @returns {'issues'|'epics'|'board'}
+ * @returns {'issues'|'epics'|'board'|'integrations'}
  */
 export function parseView(hash) {
   const h = String(hash || '');
@@ -44,6 +45,9 @@ export function parseView(hash) {
   }
   if (/^#\/board(\b|\/|$)/.test(h)) {
     return 'board';
+  }
+  if (/^#\/integrations(\b|\/|$)/.test(h)) {
+    return 'integrations';
   }
   // Default to issues (also covers #/issues and unknown/empty)
   return 'issues';
@@ -102,10 +106,10 @@ export function createHashRouter(store) {
     /**
      * Navigate to a top-level view.
      *
-     * @param {'issues'|'epics'|'board'} view
+     * @param {'issues'|'epics'|'board'|'integrations'} view
      */
     /**
-     * @param {'issues'|'epics'|'board'} view
+     * @param {'issues'|'epics'|'board'|'integrations'} view
      */
     gotoView(view) {
       const s = store.getState ? store.getState() : { selected_id: null };

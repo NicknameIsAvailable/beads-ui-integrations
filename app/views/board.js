@@ -6,6 +6,7 @@ import { debug } from '../utils/logging.js';
 import { createPriorityBadge } from '../utils/priority-badge.js';
 import { showToast } from '../utils/toast.js';
 import { createTypeBadge } from '../utils/type-badge.js';
+import { createImportDialog } from './import-dialog.js';
 
 /**
  * @typedef {{
@@ -59,6 +60,7 @@ export function createBoardView(
   transport = undefined
 ) {
   const log = debug('views:board');
+  const import_dialog = createImportDialog();
   /** @type {IssueLite[]} */
   let list_ready = [];
   /** @type {IssueLite[]} */
@@ -69,6 +71,8 @@ export function createBoardView(
   let list_closed = [];
   /** @type {IssueLite[]} */
   let list_closed_raw = [];
+  /** @type {Set<string>} */
+  let selected_ids = new Set();
   // Centralized selection helpers
   const selectors = issueStores ? createListSelectors(issueStores) : null;
 
@@ -96,10 +100,41 @@ export function createBoardView(
   function template() {
     return html`
       <div class="panel__body board-root">
-        ${columnTemplate('Blocked', 'blocked-col', list_blocked)}
-        ${columnTemplate('Ready', 'ready-col', list_ready)}
-        ${columnTemplate('In Progress', 'in-progress-col', list_in_progress)}
-        ${columnTemplate('Closed', 'closed-col', list_closed)}
+        <div class="board-toolbar">
+          <div class="board-toolbar__title">Board</div>
+          <div class="board-toolbar__actions">
+            ${selected_ids.size > 0
+              ? html`
+                  <div class="board-toolbar__selection">
+                    <span>Выбрано: ${selected_ids.size}</span>
+                    <button type="button" class="btn" @click=${clearSelection}>
+                      Снять выделение
+                    </button>
+                    <button
+                      type="button"
+                      class="btn danger"
+                      @click=${deleteSelected}
+                    >
+                      Удалить
+                    </button>
+                  </div>
+                `
+              : null}
+            <button
+              type="button"
+              class="btn primary"
+              @click=${openImportDialog}
+            >
+              Import tasks
+            </button>
+          </div>
+        </div>
+        <div class="board-columns">
+          ${columnTemplate('Blocked', 'blocked-col', list_blocked)}
+          ${columnTemplate('Ready', 'ready-col', list_ready)}
+          ${columnTemplate('In Progress', 'in-progress-col', list_in_progress)}
+          ${columnTemplate('Closed', 'closed-col', list_closed)}
+        </div>
       </div>
     `;
   }
@@ -126,6 +161,17 @@ export function createBoardView(
               ${item_count}
             </span>
           </div>
+          ${item_count > 0
+            ? html`
+                <button
+                  type="button"
+                  class="board-column__select-all"
+                  @click=${() => toggleSelectAll(id, items)}
+                >
+                  ${isAllSelected(items) ? 'Снять все' : 'Выбрать все'}
+                </button>
+              `
+            : null}
           ${id === 'closed-col'
             ? html`<label class="board-closed-filter">
                 <span class="visually-hidden">Filter closed issues</span>
@@ -155,7 +201,7 @@ export function createBoardView(
           role="list"
           aria-labelledby=${id + '-header'}
         >
-          ${items.map((it) => cardTemplate(it))}
+          ${items.map((it) => cardTemplate(it, id))}
         </div>
       </section>
     `;
@@ -163,19 +209,35 @@ export function createBoardView(
 
   /**
    * @param {IssueLite} it
+   * @param {string} column_id
    */
-  function cardTemplate(it) {
+  function cardTemplate(it, column_id) {
+    const is_selected = selected_ids.has(it.id);
     return html`
       <article
-        class="board-card"
+        class=${`board-card ${is_selected ? 'board-card--selected' : ''}`}
         data-issue-id=${it.id}
+        data-column-id=${column_id}
         role="listitem"
         tabindex="-1"
         draggable="true"
-        @click=${(/** @type {MouseEvent} */ ev) => onCardClick(ev, it.id)}
+        @click=${(/** @type {MouseEvent} */ ev) =>
+          onCardClick(ev, it.id, column_id)}
         @dragstart=${(/** @type {DragEvent} */ ev) => onDragStart(ev, it.id)}
         @dragend=${onDragEnd}
       >
+        <label class="board-card__select">
+          <input
+            type="checkbox"
+            ?checked=${is_selected}
+            @click=${(/** @type {MouseEvent} */ ev) => ev.stopPropagation()}
+            @change=${(/** @type {Event} */ ev) => {
+              ev.stopPropagation();
+              toggleSelect(it.id, column_id);
+            }}
+          />
+          <span class="visually-hidden">Select card</span>
+        </label>
         <div class="board-card__title text-truncate">
           ${it.title || '(no title)'}
         </div>
@@ -189,17 +251,229 @@ export function createBoardView(
 
   /** @type {string|null} */
   let dragging_id = null;
+  /** @type {string|null} */
+  let last_selected_id = null;
+  /** @type {string|null} */
+  let last_selected_column = null;
 
   /**
    * Handle card click, ignoring clicks during drag operations.
    *
    * @param {MouseEvent} ev
    * @param {string} id
+   * @param {string} column_id
    */
-  function onCardClick(ev, id) {
+  function onCardClick(ev, id, column_id) {
+    const target = /** @type {HTMLElement} */ (ev.target);
+    if (target.closest('.board-card__select')) {
+      return;
+    }
+    if (ev.shiftKey) {
+      selectRange(column_id, id);
+      return;
+    }
+    if (ev.metaKey || ev.ctrlKey) {
+      toggleSelect(id, column_id);
+      return;
+    }
     // Only navigate if this wasn't a drag operation
     if (!dragging_id) {
       gotoIssue(id);
+    }
+  }
+
+  /**
+   * @param {string} id
+   * @param {string} column_id
+   * @returns {void}
+   */
+  function toggleSelect(id, column_id) {
+    /** @type {Set<string>} */
+    const next = new Set(selected_ids);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    selected_ids = next;
+    last_selected_id = id;
+    last_selected_column = column_id;
+    doRender();
+  }
+
+  /**
+   * @param {IssueLite[]} items
+   * @returns {boolean}
+   */
+  function isAllSelected(items) {
+    if (!items.length) {
+      return false;
+    }
+    return items.every((item) => selected_ids.has(item.id));
+  }
+
+  /**
+   * @param {string} column_id
+   * @param {IssueLite[]} items
+   * @returns {void}
+   */
+  function toggleSelectAll(column_id, items) {
+    /** @type {Set<string>} */
+    const next = new Set(selected_ids);
+    if (isAllSelected(items)) {
+      for (const item of items) {
+        next.delete(item.id);
+      }
+    } else {
+      for (const item of items) {
+        next.add(item.id);
+      }
+    }
+    selected_ids = next;
+    if (items.length > 0) {
+      last_selected_id = items[items.length - 1].id;
+      last_selected_column = column_id;
+    }
+    doRender();
+  }
+
+  /**
+   * @returns {void}
+   */
+  function clearSelection() {
+    if (selected_ids.size === 0) {
+      return;
+    }
+    selected_ids = new Set();
+    last_selected_id = null;
+    last_selected_column = null;
+    doRender();
+  }
+
+  /**
+   * @returns {void}
+   */
+  function pruneSelection() {
+    if (selected_ids.size === 0) {
+      return;
+    }
+    /** @type {Set<string>} */
+    const present_ids = new Set(
+      list_ready
+        .concat(list_blocked, list_in_progress, list_closed)
+        .map((item) => item.id)
+    );
+    /** @type {Set<string>} */
+    const next = new Set();
+    for (const id of selected_ids) {
+      if (present_ids.has(id)) {
+        next.add(id);
+      }
+    }
+    selected_ids = next;
+    if (!selected_ids.has(String(last_selected_id || ''))) {
+      last_selected_id = null;
+      last_selected_column = null;
+    }
+  }
+
+  /**
+   * @param {string} column_id
+   * @returns {void}
+   */
+  function selectAllInColumn(column_id) {
+    const items = getColumnItems(column_id);
+    if (items.length === 0) {
+      return;
+    }
+    /** @type {Set<string>} */
+    const next = new Set(selected_ids);
+    for (const item of items) {
+      next.add(item.id);
+    }
+    selected_ids = next;
+    last_selected_id = items[items.length - 1].id;
+    last_selected_column = column_id;
+    doRender();
+  }
+
+  /**
+   * @param {string} column_id
+   * @returns {IssueLite[]}
+   */
+  function getColumnItems(column_id) {
+    if (column_id === 'blocked-col') {
+      return list_blocked;
+    }
+    if (column_id === 'ready-col') {
+      return list_ready;
+    }
+    if (column_id === 'in-progress-col') {
+      return list_in_progress;
+    }
+    if (column_id === 'closed-col') {
+      return list_closed;
+    }
+    return [];
+  }
+
+  /**
+   * @param {string} column_id
+   * @param {string} id
+   * @returns {void}
+   */
+  function selectRange(column_id, id) {
+    const items = getColumnItems(column_id);
+    if (items.length === 0) {
+      return;
+    }
+    let start_id = id;
+    if (last_selected_id && last_selected_column === column_id) {
+      start_id = last_selected_id;
+    }
+    const start_index = items.findIndex((item) => item.id === start_id);
+    const end_index = items.findIndex((item) => item.id === id);
+    if (start_index < 0 || end_index < 0) {
+      toggleSelect(id, column_id);
+      return;
+    }
+    const from = Math.min(start_index, end_index);
+    const to = Math.max(start_index, end_index);
+    /** @type {Set<string>} */
+    const next = new Set(selected_ids);
+    for (let i = from; i <= to; i += 1) {
+      next.add(items[i].id);
+    }
+    selected_ids = next;
+    last_selected_id = id;
+    last_selected_column = column_id;
+    doRender();
+  }
+
+  /**
+   * @returns {Promise<void>}
+   */
+  async function deleteSelected() {
+    if (selected_ids.size === 0) {
+      return;
+    }
+    if (!transport) {
+      showToast('Удаление недоступно', 'error', 3000);
+      return;
+    }
+    const confirmed = window.confirm(
+      `Удалить выбранные задачи (${selected_ids.size})?`
+    );
+    if (!confirmed) {
+      return;
+    }
+    const ids = Array.from(selected_ids);
+    try {
+      await transport('delete-issues', { ids });
+      showToast('Задачи удалены', 'success', 2400);
+      clearSelection();
+    } catch {
+      showToast('Не удалось удалить задачи', 'error', 3200);
     }
   }
 
@@ -325,6 +599,13 @@ export function createBoardView(
     }
   }
 
+  /**
+   * @returns {void}
+   */
+  function openImportDialog() {
+    import_dialog.open();
+  }
+
   // Delegate keyboard handling from mount_element
   mount_element.addEventListener('keydown', (ev) => {
     const target = ev.target;
@@ -339,6 +620,22 @@ export function createBoardView(
       tag === 'select' ||
       target.isContentEditable === true
     ) {
+      return;
+    }
+    const key_value = String(ev.key || '').toLowerCase();
+    const has_ctrl = ev.metaKey || ev.ctrlKey;
+    if (has_ctrl && key_value === 'a') {
+      const card = target.closest('.board-card');
+      if (card) {
+        ev.preventDefault();
+        const column = /** @type {HTMLElement|null} */ (
+          card.closest('.board-column')
+        );
+        const column_id = column ? column.id : '';
+        if (column_id) {
+          selectAllInColumn(column_id);
+        }
+      }
       return;
     }
     const card = target.closest('.board-card');
@@ -605,12 +902,14 @@ export function createBoardView(
         list_closed_raw = closed;
       }
       applyClosedFilter();
+      pruneSelection();
       doRender();
     } catch {
       list_ready = [];
       list_blocked = [];
       list_in_progress = [];
       list_closed = [];
+      pruneSelection();
       doRender();
     }
   }
@@ -706,6 +1005,7 @@ export function createBoardView(
           list_in_progress = in_prog;
           list_closed_raw = closed;
           applyClosedFilter();
+          pruneSelection();
           doRender();
         }
       } catch {
@@ -718,6 +1018,10 @@ export function createBoardView(
       list_blocked = [];
       list_in_progress = [];
       list_closed = [];
+      selected_ids = new Set();
+      last_selected_id = null;
+      last_selected_column = null;
+      import_dialog.destroy();
     }
   };
 }

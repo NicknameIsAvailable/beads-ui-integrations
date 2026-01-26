@@ -15,6 +15,7 @@ import { createBoardView } from './views/board.js';
 import { createDetailView } from './views/detail.js';
 import { createEpicsView } from './views/epics.js';
 import { createFatalErrorDialog } from './views/fatal-error-dialog.js';
+import { createIntegrationsView } from './views/integrations.js';
 import { createIssueDialog } from './views/issue-dialog.js';
 import { createListView } from './views/list.js';
 import { createTopNav } from './views/nav.js';
@@ -38,6 +39,7 @@ export function bootstrap(root_element) {
     </section>
     <section id="epics-root" class="route epics" hidden></section>
     <section id="board-root" class="route board" hidden></section>
+    <section id="integrations-root" class="route integrations" hidden></section>
     <section id="detail-panel" class="route detail" hidden></section>
   `;
   render(shell, root_element);
@@ -50,12 +52,21 @@ export function bootstrap(root_element) {
   const epics_root = document.getElementById('epics-root');
   /** @type {HTMLElement|null} */
   const board_root = document.getElementById('board-root');
+  /** @type {HTMLElement|null} */
+  const integrations_root = document.getElementById('integrations-root');
 
   /** @type {HTMLElement|null} */
   const list_mount = document.getElementById('list-panel');
   /** @type {HTMLElement|null} */
   const detail_mount = document.getElementById('detail-panel');
-  if (list_mount && issues_root && epics_root && board_root && detail_mount) {
+  if (
+    list_mount &&
+    issues_root &&
+    epics_root &&
+    board_root &&
+    integrations_root &&
+    detail_mount
+  ) {
     /** @type {HTMLElement|null} */
     const header_loading = document.getElementById('header-loading');
     const activity = createActivityIndicator(header_loading);
@@ -382,14 +393,15 @@ export function bootstrap(root_element) {
       log('filters parse error: %o', err);
     }
     // Load last-view from storage
-    /** @type {'issues'|'epics'|'board'} */
+    /** @type {'issues'|'epics'|'board'|'integrations'} */
     let last_view = 'issues';
     try {
       const raw_view = window.localStorage.getItem('beads-ui.view');
       if (
         raw_view === 'issues' ||
         raw_view === 'epics' ||
-        raw_view === 'board'
+        raw_view === 'board' ||
+        raw_view === 'integrations'
       ) {
         last_view = raw_view;
       }
@@ -464,6 +476,60 @@ export function bootstrap(root_element) {
       // ignore missing header
     }
 
+    /** @type {boolean} */
+    let analytics_busy = false;
+    /**
+     * @param {MouseEvent} ev
+     * @returns {Promise<void>}
+     */
+    async function handleAnalyticsClick(ev) {
+      ev.preventDefault();
+      if (analytics_busy) {
+        return;
+      }
+      analytics_busy = true;
+      const btn_analytics = /** @type {HTMLButtonElement|null} */ (
+        document.getElementById('analytics-btn')
+      );
+      if (btn_analytics) {
+        btn_analytics.disabled = true;
+      }
+      try {
+        const result = await tracked_send('generate-analytics');
+        const payload =
+          result && typeof result === 'object' ? /** @type {any} */ (result) : null;
+        const dashboard_html =
+          payload && typeof payload.html === 'string' ? payload.html : '';
+        if (!dashboard_html) {
+          showToast('Failed to generate dashboard', 'error', 3200);
+          return;
+        }
+        const blob = new Blob([dashboard_html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank', 'noopener');
+        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+        showToast('Dashboard generated', 'success', 2200);
+      } catch {
+        showToast('Dashboard generation failed', 'error', 3200);
+      } finally {
+        analytics_busy = false;
+        if (btn_analytics) {
+          btn_analytics.disabled = false;
+        }
+      }
+    }
+
+    try {
+      const btn_analytics = /** @type {HTMLButtonElement|null} */ (
+        document.getElementById('analytics-btn')
+      );
+      if (btn_analytics) {
+        btn_analytics.addEventListener('click', handleAnalyticsClick);
+      }
+    } catch {
+      // ignore missing header
+    }
+
     // Local transport shim: for list-issues, serve from local listSelectors;
     // otherwise forward to ws transport for mutations/show.
     /**
@@ -519,7 +585,7 @@ export function bootstrap(root_element) {
       const s = store.getState();
       store.setState({ selected_id: null });
       try {
-        /** @type {'issues'|'epics'|'board'} */
+        /** @type {'issues'|'epics'|'board'|'integrations'} */
         const v = s.view || 'issues';
         router.gotoView(v);
       } catch {
@@ -632,6 +698,7 @@ export function bootstrap(root_element) {
       subscriptions,
       sub_issue_stores
     );
+    const integrations_view = createIntegrationsView(integrations_root);
     const board_view = createBoardView(
       board_root,
       data,
@@ -643,7 +710,7 @@ export function bootstrap(root_element) {
     );
     // Preload epics when switching to view
     /**
-     * @param {{ selected_id: string | null, view: 'issues'|'epics'|'board', filters: any }} s
+     * @param {{ selected_id: string | null, view: 'issues'|'epics'|'board'|'integrations', filters: any }} s
      */
     // --- Subscriptions: tab-level management and filter-driven updates ---
     /** @type {null | (() => Promise<void>)} */
@@ -697,7 +764,7 @@ export function bootstrap(root_element) {
     /**
      * Ensure only the active tab has subscriptions; clean up previous.
      *
-     * @param {{ view: 'issues'|'epics'|'board', filters: any }} s
+     * @param {{ view: 'issues'|'epics'|'board'|'integrations', filters: any }} s
      */
     function ensureTabSubscriptions(s) {
       // Issues tab
@@ -920,14 +987,15 @@ export function bootstrap(root_element) {
     /**
      * Manage route visibility and list subscriptions per view.
      *
-     * @param {{ selected_id: string | null, view: 'issues'|'epics'|'board', filters: any }} s
+     * @param {{ selected_id: string | null, view: 'issues'|'epics'|'board'|'integrations', filters: any }} s
      */
     const onRouteChange = (s) => {
-      if (issues_root && epics_root && board_root && detail_mount) {
+      if (issues_root && epics_root && board_root && integrations_root) {
         // Underlying route visibility is controlled only by selected view
         issues_root.hidden = s.view !== 'issues';
         epics_root.hidden = s.view !== 'epics';
         board_root.hidden = s.view !== 'board';
+        integrations_root.hidden = s.view !== 'integrations';
         // detail_mount visibility handled in subscription above
       }
       // Ensure subscriptions for the active tab before loading the view to
@@ -938,6 +1006,9 @@ export function bootstrap(root_element) {
       }
       if (!s.selected_id && s.view === 'board') {
         void board_view.load();
+      }
+      if (!s.selected_id && s.view === 'integrations') {
+        integrations_view.reload();
       }
       window.localStorage.setItem('beads-ui.view', s.view);
     };

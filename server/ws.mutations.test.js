@@ -1,13 +1,20 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { runBd, runBdJson } from './bd.js';
+import { buildAnalyticsDashboard, recordStatusChange } from './analytics.js';
 import { handleMessage } from './ws.js';
 
 vi.mock('./bd.js', () => ({ runBdJson: vi.fn(), runBd: vi.fn() }));
+vi.mock('./analytics.js', () => ({
+  buildAnalyticsDashboard: vi.fn(),
+  recordStatusChange: vi.fn()
+}));
 
 // Ensure clean mock state for each test
 beforeEach(() => {
   /** @type {import('vitest').Mock} */ (runBd).mockReset();
   /** @type {import('vitest').Mock} */ (runBdJson).mockReset();
+  /** @type {import('vitest').Mock} */ (buildAnalyticsDashboard).mockReset();
+  /** @type {import('vitest').Mock} */ (recordStatusChange).mockReset();
 });
 
 function makeStubSocket() {
@@ -26,6 +33,10 @@ describe('ws mutation handlers', () => {
   test('update-status validates and returns updated issue', async () => {
     const mRun = /** @type {import('vitest').Mock} */ (runBd);
     const mJson = /** @type {import('vitest').Mock} */ (runBdJson);
+    mJson.mockResolvedValueOnce({
+      code: 0,
+      stdoutJson: { id: 'UI-7', status: 'open' }
+    });
     mRun.mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' });
     mJson.mockResolvedValueOnce({
       code: 0,
@@ -83,6 +94,25 @@ describe('ws mutation handlers', () => {
     const obj = JSON.parse(ws.sent[ws.sent.length - 1]);
     expect(obj.ok).toBe(true);
     expect(obj.payload.priority).toBe(1);
+  });
+
+  test('generate-analytics returns html payload', async () => {
+    const m_analytics = /** @type {import('vitest').Mock} */ (
+      buildAnalyticsDashboard
+    );
+    m_analytics.mockResolvedValueOnce('<html><body>ok</body></html>');
+    const ws = makeStubSocket();
+    const req = {
+      id: 'r-analytics',
+      type: 'generate-analytics'
+    };
+    await handleMessage(
+      /** @type {any} */ (ws),
+      Buffer.from(JSON.stringify(req))
+    );
+    const obj = JSON.parse(ws.sent[ws.sent.length - 1]);
+    expect(obj.ok).toBe(true);
+    expect(obj.payload.html).toContain('ok');
   });
 
   test('update-priority invalid payload yields bad_request', async () => {

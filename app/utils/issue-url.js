@@ -1,7 +1,7 @@
 /**
  * Build a canonical issue hash that retains the view.
  *
- * @param {'issues'|'epics'|'board'} view
+ * @param {'issues'|'epics'|'board'|'integrations'} view
  * @param {string} id
  */
 export function issueHashFor(view, id) {

@@ -20,7 +20,7 @@ export function getConfig() {
 
   let port_value = Number.parseInt(process.env.PORT || '', 10);
   if (!Number.isFinite(port_value)) {
-    port_value = 3000;
+    port_value = 7183;
   }
 
   const host_env = process.env.HOST;

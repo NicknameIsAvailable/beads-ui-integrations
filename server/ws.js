@@ -7,6 +7,7 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { isRequest, makeError, makeOk } from '../app/protocol.js';
 import { getGitUserName, runBd, runBdJson } from './bd.js';
+import { buildAnalyticsDashboard, recordStatusChange } from './analytics.js';
 import { resolveDbPath } from './db.js';
 import { fetchListForSubscription } from './list-adapters.js';
 import { debug } from './logging.js';
@@ -794,6 +795,19 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
+    /** @type {any} */
+    let before_issue = null;
+    try {
+      const before_result = await runBdJson(['show', id, '--json'], {
+        cwd: CURRENT_WORKSPACE?.root_dir
+      });
+      if (before_result && before_result.code === 0 && before_result.stdoutJson) {
+        before_issue = before_result.stdoutJson;
+      }
+    } catch {
+      before_issue = null;
+    }
+
     const res = await runBd(['update', id, '--status', status]);
     if (res.code !== 0) {
       ws.send(
@@ -809,11 +823,38 @@ export async function handleMessage(ws, data) {
       return;
     }
     ws.send(JSON.stringify(makeOk(req, shown.stdoutJson)));
+    try {
+      const root_dir = CURRENT_WORKSPACE?.root_dir || process.cwd();
+      recordStatusChange(root_dir, before_issue, shown.stdoutJson);
+    } catch {
+      // ignore analytics logging failures
+    }
     // After mutation, refresh active subscriptions once (watcher or timeout)
     try {
       triggerMutationRefreshOnce();
     } catch {
       // ignore
+    }
+    return;
+  }
+
+  if (req.type === 'generate-analytics') {
+    log('generate-analytics');
+    const root_dir = CURRENT_WORKSPACE?.root_dir || process.cwd();
+    try {
+      const dashboard_html = await buildAnalyticsDashboard(root_dir);
+      ws.send(JSON.stringify(makeOk(req, { html: dashboard_html })));
+    } catch (err) {
+      ws.send(
+        JSON.stringify(
+          makeError(
+            req,
+            'analytics_error',
+            'Failed to generate analytics',
+            { message: err && /** @type {any} */ (err).message }
+          )
+        )
+      );
     }
     return;
   }
@@ -1247,6 +1288,50 @@ export async function handleMessage(ws, data) {
       return;
     }
     ws.send(JSON.stringify(makeOk(req, { deleted: true, id })));
+    try {
+      triggerMutationRefreshOnce();
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  // delete-issues: payload { ids: string[] }
+  if (req.type === 'delete-issues') {
+    const { ids } = /** @type {any} */ (req.payload || {});
+    if (!Array.isArray(ids) || ids.length === 0) {
+      ws.send(
+        JSON.stringify(
+          makeError(req, 'bad_request', 'payload requires { ids: string[] }')
+        )
+      );
+      return;
+    }
+    /** @type {string[]} */
+    const cleaned_ids = ids
+      .map((id) => String(id || '').trim())
+      .filter((id) => id.length > 0);
+    if (cleaned_ids.length === 0) {
+      ws.send(
+        JSON.stringify(
+          makeError(req, 'bad_request', 'payload requires { ids: string[] }')
+        )
+      );
+      return;
+    }
+    /** @type {string[]} */
+    const deleted = [];
+    /** @type {Array<{ id: string, error: string }>} */
+    const failed = [];
+    for (const id of cleaned_ids) {
+      const res = await runBd(['delete', id, '--force']);
+      if (res.code !== 0) {
+        failed.push({ id, error: res.stderr || 'bd delete failed' });
+        continue;
+      }
+      deleted.push(id);
+    }
+    ws.send(JSON.stringify(makeOk(req, { deleted, failed })));
     try {
       triggerMutationRefreshOnce();
     } catch {

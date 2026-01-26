@@ -68,19 +68,7 @@ export function createWorkspacePicker(mount_element, store, onWorkspaceChange) {
       return html``;
     }
 
-    // If only one workspace, show it as a simple label
-    if (available.length === 1) {
-      const name = getProjectName(available[0].path);
-      return html`
-        <div class="workspace-picker workspace-picker--single">
-          <span class="workspace-picker__label" title="${available[0].path}"
-            >${name}</span
-          >
-        </div>
-      `;
-    }
-
-    // Multiple workspaces: show dropdown
+    // Show dropdown (even if only one workspace)
     const current_path = current?.path || '';
     return html`
       <div class="workspace-picker">
