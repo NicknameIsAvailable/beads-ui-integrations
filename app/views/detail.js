@@ -2,6 +2,7 @@
 import { html, render } from 'lit-html';
 import { parseView } from '../router.js';
 import { issueHashFor } from '../utils/issue-url.js';
+import { labelColorStyle } from '../utils/label-color.js';
 import { debug } from '../utils/logging.js';
 import { renderMarkdown } from '../utils/markdown.js';
 import { emojiForPriority } from '../utils/priority-badge.js';
@@ -9,6 +10,7 @@ import { priority_levels } from '../utils/priority.js';
 import { statusLabel } from '../utils/status.js';
 import { showToast } from '../utils/toast.js';
 import { createTypeBadge } from '../utils/type-badge.js';
+import { createTaskSearchDialog } from './task-search-dialog.js';
 
 /**
  * Format a date string for display.
@@ -61,6 +63,7 @@ function formatCommentDate(dateStr) {
  * @property {string} [assignee]
  * @property {number} [priority]
  * @property {string[]} [labels]
+ * @property {string} [external_ref]
  * @property {Dependency[]} [dependencies]
  * @property {Dependency[]} [dependents]
  * @property {Comment[]} [comments]
@@ -89,6 +92,7 @@ export function createDetailView(
   issue_stores = undefined
 ) {
   const log = debug('views:detail');
+  const task_search_dialog = createTaskSearchDialog();
   /** @type {IssueDetail | null} */
   let current = null;
   /** @type {string | null} */
@@ -903,6 +907,52 @@ export function createDetailView(
 
   /**
    * @param {IssueDetail} issue
+   * @returns {string}
+   */
+  function getYougileTaskId(issue) {
+    /** @type {any} */
+    const any_issue = issue;
+    const external_ref = String(
+      issue.external_ref || any_issue.externalRef || ''
+    ).trim();
+    if (external_ref.toLowerCase().startsWith('yougile:')) {
+      return external_ref.slice('yougile:'.length).trim();
+    }
+    const desc = String(issue.description || '');
+    const match = desc.match(/yougile id:\\s*([^\\s]+)/i);
+    if (match) {
+      return String(match[1] || '').trim();
+    }
+    return '';
+  }
+
+  /**
+   * @param {IssueDetail} issue
+   * @returns {string}
+   */
+  function getYougileTaskLink(issue) {
+    const desc = String(issue.description || '');
+    const match = desc.match(/https?:\/\/[^\s]+yougile\.com[^\s]*/i);
+    if (!match) {
+      return '';
+    }
+    return String(match[0] || '').trim();
+  }
+
+  /**
+   * @param {string} task_id
+   * @returns {void}
+   */
+  function openMoveDialog(task_id, task_link) {
+    if (!task_id) {
+      showToast('Yougile ID не найден в задаче', 'error', 2600);
+      return;
+    }
+    task_search_dialog.openWithTaskId(task_id, task_link || '');
+  }
+
+  /**
+   * @param {IssueDetail} issue
    */
   function detailTemplate(issue) {
     const title_zone = edit_title
@@ -1098,7 +1148,10 @@ export function createDetailView(
         ${labels.map(
           (l) =>
             html`<li>
-              <span class="badge" title=${l}
+              <span
+                class="badge badge--label"
+                title=${l}
+                style=${labelColorStyle(l)}
                 >${l}
                 <button
                   class="icon-button"
@@ -1125,6 +1178,26 @@ export function createDetailView(
         <button @click=${onAddLabel}>Add</button>
       </div>
     </div>`;
+
+    const yougile_task_id = getYougileTaskId(issue);
+    const yougile_task_link = getYougileTaskLink(issue);
+    const yougile_block =
+      yougile_task_id || yougile_task_link
+        ? html`<div class="props-card yougile">
+            <div class="props-card__title">Yougile</div>
+            <div class="props-card__row">
+              <span class="mono"> ${yougile_task_id || 'ID не найден'} </span>
+              <button
+                class="btn"
+                ?disabled=${!yougile_task_id}
+                @click=${() =>
+                  openMoveDialog(yougile_task_id, yougile_task_link)}
+              >
+                Переместить
+              </button>
+            </div>
+          </div>`
+        : null;
 
     // Design section block
     const design_text = String(issue.design || '');
@@ -1301,6 +1374,7 @@ export function createDetailView(
                 </div>
               </div>
               ${labels_block}
+              ${yougile_block}
               ${depsSection('Dependencies', issue.dependencies || [])}
               ${depsSection('Dependents', issue.dependents || [])}
             </div>
@@ -1515,6 +1589,7 @@ export function createDetailView(
         delete_dialog.parentNode.removeChild(delete_dialog);
         delete_dialog = null;
       }
+      task_search_dialog.destroy();
     }
   };
 }

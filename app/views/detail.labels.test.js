@@ -76,4 +76,38 @@ describe('detail view labels', () => {
     });
     expect(mount.querySelectorAll('.labels .badge').length).toBe(1);
   });
+
+  test('applies deterministic label color style', async () => {
+    const mount = mountDiv();
+    const current = {
+      id: 'UI-9',
+      title: 'Color label',
+      status: 'open',
+      priority: 1,
+      labels: ['frontend']
+    };
+    const stores = {
+      /** @param {string} id */
+      snapshotFor(id) {
+        return id === 'detail:UI-9' ? [current] : [];
+      },
+      subscribe() {
+        return () => {};
+      }
+    };
+    const sendFn = vi.fn(async () => current);
+
+    const view = createDetailView(mount, sendFn, undefined, stores);
+    await view.load('UI-9');
+
+    const badge = /** @type {HTMLSpanElement} */ (
+      mount.querySelector('.labels .badge')
+    );
+
+    expect(badge).not.toBeNull();
+
+    const label_base = badge.style.getPropertyValue('--label-base');
+
+    expect(label_base).not.toBe('');
+  });
 });

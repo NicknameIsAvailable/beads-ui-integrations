@@ -44,7 +44,7 @@ export function createImportDialog() {
   dialog.setAttribute('aria-modal', 'true');
   document.body.appendChild(dialog);
 
-  /** @type {{ loading: boolean, step_index: number, integrations: IntegrationOption[], teams: TeamOption[], projects: ProjectOption[], columns: ColumnOption[], users: UserOption[], stickers: StickerOption[], preview_tasks: PreviewTask[], preview_task: PreviewTask | null, preview_loading: boolean, selected_integration: string, selected_team: string, selected_project: string, selected_columns: Set<string>, selected_users: Set<string>, selected_sticker_values: Set<string> }} */
+  /** @type {{ loading: boolean, step_index: number, integrations: IntegrationOption[], teams: TeamOption[], projects: ProjectOption[], columns: ColumnOption[], users: UserOption[], stickers: StickerOption[], preview_tasks: PreviewTask[], preview_task: PreviewTask | null, preview_loading: boolean, selected_integration: string, selected_team: string, selected_project: string, selected_columns: Set<string>, selected_users: Set<string>, selected_sticker_values: Set<string>, selected_task_ids: Set<string> }} */
   let view_state = {
     loading: false,
     step_index: 0,
@@ -62,7 +62,8 @@ export function createImportDialog() {
     selected_project: '',
     selected_columns: new Set(),
     selected_users: new Set(),
-    selected_sticker_values: new Set()
+    selected_sticker_values: new Set(),
+    selected_task_ids: new Set()
   };
 
   /** @type {string} */
@@ -135,7 +136,8 @@ export function createImportDialog() {
       selected_project: '',
       selected_columns: new Set(),
       selected_users: new Set(),
-      selected_sticker_values: new Set()
+      selected_sticker_values: new Set(),
+      selected_task_ids: new Set()
     });
     last_preview_key = '';
     try {
@@ -446,7 +448,8 @@ export function createImportDialog() {
       setState({
         preview_tasks: [],
         preview_task: null,
-        preview_loading: false
+        preview_loading: false,
+        selected_task_ids: new Set()
       });
       return;
     }
@@ -459,7 +462,12 @@ export function createImportDialog() {
       return;
     }
     last_preview_key = key;
-    setState({ preview_loading: true, preview_tasks: [], preview_task: null });
+    setState({
+      preview_loading: true,
+      preview_tasks: [],
+      preview_task: null,
+      selected_task_ids: new Set()
+    });
     try {
       const result = await fetchIntegrationPreview(
         view_state.selected_integration,
@@ -506,15 +514,85 @@ export function createImportDialog() {
           };
         })
         .filter((/** @type {PreviewTask} */ task) => task.id.length > 0);
-      setState({ preview_loading: false, preview_tasks: tasks });
+      const selected_task_ids = deriveSelectedTaskIds(
+        tasks,
+        view_state.selected_task_ids
+      );
+      setState({
+        preview_loading: false,
+        preview_tasks: tasks,
+        selected_task_ids
+      });
     } catch (err) {
       log('load preview failed: %o', err);
       setState({
         preview_loading: false,
         preview_tasks: [],
-        preview_task: null
+        preview_task: null,
+        selected_task_ids: new Set()
       });
     }
+  }
+
+  /**
+   * @param {PreviewTask[]} tasks
+   * @param {Set<string>} previous_selected
+   * @returns {Set<string>}
+   */
+  function deriveSelectedTaskIds(tasks, previous_selected) {
+    if (tasks.length === 0) {
+      return new Set();
+    }
+    if (previous_selected.size === 0) {
+      return new Set(tasks.map((task) => task.id));
+    }
+    /** @type {Set<string>} */
+    const next = new Set();
+    for (const task of tasks) {
+      if (previous_selected.has(task.id)) {
+        next.add(task.id);
+      }
+    }
+    if (next.size > 0) {
+      return next;
+    }
+    return new Set(tasks.map((task) => task.id));
+  }
+
+  /**
+   * @param {string} task_id
+   * @returns {void}
+   */
+  function toggleTaskSelection(task_id) {
+    /** @type {Set<string>} */
+    const next = new Set(view_state.selected_task_ids);
+    if (next.has(task_id)) {
+      next.delete(task_id);
+    } else {
+      next.add(task_id);
+    }
+    setState({ selected_task_ids: next });
+  }
+
+  /**
+   * @returns {void}
+   */
+  function selectAllTasks() {
+    if (view_state.preview_tasks.length === 0) {
+      return;
+    }
+    setState({
+      selected_task_ids: new Set(
+        view_state.preview_tasks.map((task) => task.id)
+      )
+    });
+  }
+
+  /**
+   * @returns {void}
+   */
+  function clearSelectedTasks() {
+    setState({ selected_task_ids: new Set() });
   }
 
   /**
@@ -537,7 +615,8 @@ export function createImportDialog() {
       stickers: [],
       selected_sticker_values: new Set(),
       preview_tasks: [],
-      preview_task: null
+      preview_task: null,
+      selected_task_ids: new Set()
     });
     last_preview_key = '';
     if (integration_id) {
@@ -563,7 +642,8 @@ export function createImportDialog() {
       stickers: [],
       selected_sticker_values: new Set(),
       preview_tasks: [],
-      preview_task: null
+      preview_task: null,
+      selected_task_ids: new Set()
     });
     last_preview_key = '';
     if (team_id && view_state.selected_integration) {
@@ -657,6 +737,13 @@ export function createImportDialog() {
       showToast('Нет колонок для импорта', 'error', 2600);
       return;
     }
+    if (
+      view_state.preview_tasks.length > 0 &&
+      view_state.selected_task_ids.size === 0
+    ) {
+      showToast('Выберите задачи для импорта', 'error', 2600);
+      return;
+    }
     setState({ loading: true });
     try {
       const result = await runImport(view_state.selected_integration, {
@@ -664,7 +751,8 @@ export function createImportDialog() {
         team_id: view_state.selected_team,
         column_ids,
         assignee_ids: Array.from(view_state.selected_users),
-        sticker_value_ids: Array.from(view_state.selected_sticker_values)
+        sticker_value_ids: Array.from(view_state.selected_sticker_values),
+        task_ids: Array.from(view_state.selected_task_ids)
       });
       if (result.ok) {
         showToast('Импорт запущен', 'success', 2400);
@@ -1069,19 +1157,45 @@ export function createImportDialog() {
                 `
               : html`
                   <div class="import-dialog__preview-count">
-                    ${view_state.preview_tasks.length} задач(и) будет
-                    импортировано
+                    Выбрано ${view_state.selected_task_ids.size} из
+                    ${view_state.preview_tasks.length}
+                    <span class="import-dialog__preview-actions">
+                      <button
+                        type="button"
+                        class="import-dialog__tag"
+                        @click=${selectAllTasks}
+                      >
+                        Выбрать все
+                      </button>
+                      <button
+                        type="button"
+                        class="import-dialog__tag"
+                        @click=${clearSelectedTasks}
+                      >
+                        Очистить
+                      </button>
+                    </span>
                   </div>
                   <div class="import-dialog__preview-grid">
                     ${view_state.preview_tasks.map((task) => {
                       const column_label =
                         column_label_by_id.get(task.column_id) || 'Колонка';
+                      const checked = view_state.selected_task_ids.has(task.id);
                       return html`
                         <button
                           type="button"
                           class="import-dialog__preview-card"
                           @click=${() => openPreview(task)}
                         >
+                          <label class="import-dialog__preview-select">
+                            <input
+                              type="checkbox"
+                              ?checked=${checked}
+                              @click=${(ev) => ev.stopPropagation()}
+                              @change=${() => toggleTaskSelection(task.id)}
+                            />
+                            <span>Импортировать</span>
+                          </label>
                           <div class="import-dialog__preview-title">
                             ${task.title || 'Без названия'}
                           </div>

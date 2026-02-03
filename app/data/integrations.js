@@ -11,7 +11,17 @@
  * @returns {Promise<ApiResult>}
  */
 async function requestJson(url, options = {}) {
-  const res = await fetch(url, options);
+  const workspace_headers = getWorkspaceHeaders();
+  const merged_headers = {
+    ...workspace_headers,
+    ...(options.headers
+      ? /** @type {Record<string, string>} */ (options.headers)
+      : {})
+  };
+  const res = await fetch(url, {
+    ...options,
+    headers: merged_headers
+  });
   const status = res.status;
   let data = null;
   try {
@@ -20,6 +30,17 @@ async function requestJson(url, options = {}) {
     data = null;
   }
   return { ok: res.ok, status, data };
+}
+
+/**
+ * @returns {Record<string, string>}
+ */
+function getWorkspaceHeaders() {
+  const stored_path = window.localStorage.getItem('beads-ui.workspace');
+  if (!stored_path) {
+    return {};
+  }
+  return { 'x-beads-workspace': stored_path };
 }
 
 /**

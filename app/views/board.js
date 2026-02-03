@@ -469,9 +469,26 @@ export function createBoardView(
     }
     const ids = Array.from(selected_ids);
     try {
-      await transport('delete-issues', { ids });
-      showToast('Задачи удалены', 'success', 2400);
-      clearSelection();
+      const result = await transport('delete-issues', { ids });
+      const deleted = Array.isArray(result?.deleted) ? result.deleted : [];
+      const failed = Array.isArray(result?.failed) ? result.failed : [];
+      if (deleted.length > 0) {
+        showToast('Задачи удалены', 'success', 2400);
+        /** @type {Set<string>} */
+        const next = new Set(selected_ids);
+        for (const id of deleted) {
+          next.delete(id);
+        }
+        selected_ids = next;
+        doRender();
+      }
+      if (failed.length > 0 || deleted.length === 0) {
+        showToast(
+          `Не удалось удалить задачи (${failed.length || ids.length})`,
+          'error',
+          3200
+        );
+      }
     } catch {
       showToast('Не удалось удалить задачи', 'error', 3200);
     }

@@ -6,8 +6,8 @@
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { isRequest, makeError, makeOk } from '../app/protocol.js';
-import { getGitUserName, runBd, runBdJson } from './bd.js';
 import { buildAnalyticsDashboard, recordStatusChange } from './analytics.js';
+import { getGitUserName, runBd, runBdJson } from './bd.js';
 import { resolveDbPath } from './db.js';
 import { fetchListForSubscription } from './list-adapters.js';
 import { debug } from './logging.js';
@@ -801,7 +801,11 @@ export async function handleMessage(ws, data) {
       const before_result = await runBdJson(['show', id, '--json'], {
         cwd: CURRENT_WORKSPACE?.root_dir
       });
-      if (before_result && before_result.code === 0 && before_result.stdoutJson) {
+      if (
+        before_result &&
+        before_result.code === 0 &&
+        before_result.stdoutJson
+      ) {
         before_issue = before_result.stdoutJson;
       }
     } catch {
@@ -847,12 +851,9 @@ export async function handleMessage(ws, data) {
     } catch (err) {
       ws.send(
         JSON.stringify(
-          makeError(
-            req,
-            'analytics_error',
-            'Failed to generate analytics',
-            { message: err && /** @type {any} */ (err).message }
-          )
+          makeError(req, 'analytics_error', 'Failed to generate analytics', {
+            message: err && /** @type {any} */ (err).message
+          })
         )
       );
     }
@@ -1278,7 +1279,9 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
-    const res = await runBd(['delete', id, '--force']);
+    const res = await runBd(['delete', id, '--force'], {
+      cwd: CURRENT_WORKSPACE?.root_dir
+    });
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(
@@ -1324,7 +1327,9 @@ export async function handleMessage(ws, data) {
     /** @type {Array<{ id: string, error: string }>} */
     const failed = [];
     for (const id of cleaned_ids) {
-      const res = await runBd(['delete', id, '--force']);
+      const res = await runBd(['delete', id, '--force'], {
+        cwd: CURRENT_WORKSPACE?.root_dir
+      });
       if (res.code !== 0) {
         failed.push({ id, error: res.stderr || 'bd delete failed' });
         continue;

@@ -4,7 +4,7 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runBd } from './bd.js';
+import { runBd, runBdJson } from './bd.js';
 import { listIntegrations } from './integrations/registry.js';
 import {
   getIntegrationStatusList,
@@ -19,7 +19,10 @@ import {
   normalizeYougileTitle,
   requestYougileApiKey
 } from './integrations/yougile.js';
-import { registerWorkspace } from './registry-watcher.js';
+import {
+  getAvailableWorkspaces,
+  registerWorkspace
+} from './registry-watcher.js';
 
 /**
  * Create and configure the Express application.
@@ -47,13 +50,39 @@ export function createApp(config) {
   app.use(express.json());
 
   /**
+   * Resolve the active workspace root for the request.
+   *
+   * @param {Request} req
+   * @returns {string}
+   */
+  function resolveWorkspaceRoot(req) {
+    const header_value = String(req.header('x-beads-workspace') || '').trim();
+    if (!header_value) {
+      return config.root_dir;
+    }
+    const resolved_path = path.resolve(header_value);
+    const available = getAvailableWorkspaces();
+    for (const workspace of available) {
+      const workspace_root = path.resolve(workspace.path);
+      if (resolved_path === workspace_root) {
+        return workspace_root;
+      }
+      if (resolved_path.startsWith(workspace_root + path.sep)) {
+        return workspace_root;
+      }
+    }
+    return config.root_dir;
+  }
+
+  /**
    * Yougile integration status.
    *
-   * @param {Request} _req
+   * @param {Request} req
    * @param {Response} res
    */
-  app.get('/api/integrations/yougile/status', (_req, res) => {
-    const state = readIntegrations(config.root_dir);
+  app.get('/api/integrations/yougile/status', (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
+    const state = readIntegrations(root_dir);
     const yougile = state.yougile || null;
     res.status(200).json({
       ok: true,
@@ -65,12 +94,13 @@ export function createApp(config) {
   /**
    * All integration statuses for the current workspace.
    *
-   * @param {Request} _req
+   * @param {Request} req
    * @param {Response} res
    */
-  app.get('/api/integrations/status', (_req, res) => {
+  app.get('/api/integrations/status', (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
     const registry = listIntegrations();
-    const statuses = getIntegrationStatusList(config.root_dir);
+    const statuses = getIntegrationStatusList(root_dir);
     res.status(200).json({
       ok: true,
       integrations: registry,
@@ -85,6 +115,7 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.post('/api/integrations/yougile/connect', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
     const body = req.body || {};
     const login = typeof body.login === 'string' ? body.login : '';
     const password = typeof body.password === 'string' ? body.password : '';
@@ -131,7 +162,7 @@ export function createApp(config) {
         }
       }
 
-      const saved = saveYougileConnection(config.root_dir, {
+      const saved = saveYougileConnection(root_dir, {
         api_key: resolved_key,
         base_url,
         company_id: company_id || null
@@ -157,8 +188,9 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/projects', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
     const team_id = String(req.query.team_id || '');
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -167,7 +199,7 @@ export function createApp(config) {
       base_url: yougile.base_url,
       api_key: yougile.api_key
     });
-    const severity_by_value_id = await fetchYougileSeverityValueMap(client);
+    // no-op: severity map not needed for projects list
 
     const result = await fetchYougileList(client, ['/projects', '/project']);
     if (!result.ok) {
@@ -221,7 +253,8 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/teams', async (_req, res) => {
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const root_dir = resolveWorkspaceRoot(_req);
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -248,12 +281,13 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/boards', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
     const project_id = String(req.query.project_id || '');
     if (!project_id) {
       res.status(400).json({ ok: false, error: 'Missing project_id' });
       return;
     }
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -286,6 +320,7 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/columns', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
     const project_id = String(req.query.project_id || '');
     const board_id = String(req.query.board_id || '');
     if (!project_id && !board_id) {
@@ -294,7 +329,7 @@ export function createApp(config) {
         .json({ ok: false, error: 'Missing project_id or board_id' });
       return;
     }
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -391,7 +426,8 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/columns-all', async (_req, res) => {
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const root_dir = resolveWorkspaceRoot(_req);
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -423,8 +459,9 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/users', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
     const project_id = String(req.query.project_id || '');
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -484,7 +521,8 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/stickers', async (_req, res) => {
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const root_dir = resolveWorkspaceRoot(_req);
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -527,7 +565,7 @@ export function createApp(config) {
       /** @type {Array<{ id: string, title: string }>} */
       let values = [];
       if (sticker.raw_states.length > 0) {
-          values = sticker.raw_states
+        values = sticker.raw_states
           .map((/** @type {any} */ state) => {
             const any = /** @type {any} */ (state);
             return {
@@ -575,6 +613,7 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/preview', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
     const column_ids_raw = String(req.query.column_ids || '');
     if (!column_ids_raw) {
       res.status(400).json({ ok: false, error: 'Missing column_ids' });
@@ -585,7 +624,7 @@ export function createApp(config) {
       String(req.query.sticker_value_ids || '')
     );
     const column_ids = splitIds(column_ids_raw);
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -635,13 +674,216 @@ export function createApp(config) {
   });
 
   /**
+   * Find a single Yougile task by id within a board.
+   *
+   * @param {Request} req
+   * @param {Response} res
+   */
+  app.get('/api/integrations/yougile/task-search', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
+    const board_id = String(req.query.board_id || '').trim();
+    const task_id_raw = String(req.query.task_id || '').trim();
+    const normalized_task_id = normalizeYougileId(task_id_raw) || task_id_raw;
+    if (!normalized_task_id) {
+      res.status(400).json({ ok: false, error: 'Missing task_id' });
+      return;
+    }
+    const yougile = readIntegrations(root_dir).yougile;
+    if (!yougile || !yougile.api_key) {
+      res.status(400).json({ ok: false, error: 'Yougile not connected' });
+      return;
+    }
+    const client = createYougileClient({
+      base_url: yougile.base_url,
+      api_key: yougile.api_key
+    });
+
+    /** @type {Array<{ id: string, title: string, board_id: string, board_title: string, project_id: string }>} */
+    let columns = [];
+    /** @type {Map<string, string>} */
+    let column_title_by_id = new Map();
+    /** @type {Set<string> | null} */
+    let column_ids = null;
+    if (board_id) {
+      const columns_result = await fetchYougileColumnsForBoard(
+        client,
+        board_id
+      );
+      if (!columns_result.ok) {
+        res.status(columns_result.status || 502).json({
+          ok: false,
+          error: columns_result.error
+        });
+        return;
+      }
+
+      columns = normalizeYougileColumns(columns_result.data, new Map()).filter(
+        (column) => column.board_id === board_id
+      );
+      column_title_by_id = new Map(
+        columns.map((column) => [column.id, column.title || ''])
+      );
+      column_ids = new Set(columns.map((column) => column.id));
+    }
+
+    const direct_task = await fetchYougileTaskById(client, normalized_task_id);
+    if (direct_task.ok) {
+      const task_payload = extractYougileTaskPayload(direct_task.data);
+      const task_any =
+        task_payload && typeof task_payload === 'object' ? task_payload : {};
+      const task_info = normalizeYougileTaskInfo(
+        task_payload,
+        yougile.base_url,
+        yougile.company_id || ''
+      );
+      if (task_info) {
+        let column_id = normalizeYougileId(
+          task_any.columnId || task_any.column_id || task_any.ColumnId || ''
+        );
+        let board_id_from_task = normalizeYougileId(
+          task_any.boardId || task_any.board_id || task_any.BoardId || ''
+        );
+        let project_id = normalizeYougileId(
+          task_any.projectId || task_any.project_id || task_any.ProjectId || ''
+        );
+        if (column_id && (!board_id_from_task || !project_id)) {
+          const all_columns = await fetchYougileColumnsAll(client);
+          const match = all_columns.find((col) => col.id === column_id);
+          if (match) {
+            board_id_from_task = board_id_from_task || match.board_id;
+            project_id = project_id || match.project_id;
+          }
+        }
+        if (column_ids && column_id && !column_ids.has(column_id)) {
+          res.status(200).json({ ok: true, task: null });
+          return;
+        }
+        res.status(200).json({
+          ok: true,
+          task: {
+            id: task_info.id,
+            title: task_info.title,
+            description: task_info.description,
+            body: task_info.body,
+            link: task_info.link,
+            column_id,
+            board_id: board_id_from_task,
+            project_id,
+            column_title: column_title_by_id.get(column_id) || ''
+          }
+        });
+        return;
+      }
+    } else if (direct_task.status && direct_task.status !== 404) {
+      res.status(direct_task.status || 502).json({
+        ok: false,
+        error: direct_task.error
+      });
+      return;
+    }
+
+    if (!board_id) {
+      res.status(200).json({ ok: true, task: null });
+      return;
+    }
+
+    for (const column of columns) {
+      const tasks_result = await fetchYougileTasks(client, column.id);
+      if (!tasks_result.ok) {
+        res.status(tasks_result.status || 502).json({
+          ok: false,
+          error: tasks_result.error
+        });
+        return;
+      }
+      const items = normalizeYougileList(tasks_result.data);
+      for (const item of items) {
+        const task_info = normalizeYougileTaskInfo(
+          item,
+          yougile.base_url,
+          yougile.company_id || ''
+        );
+        if (!task_info) {
+          continue;
+        }
+        const normalized_id = normalizeYougileId(task_info.id);
+        if (normalized_id !== normalized_task_id) {
+          continue;
+        }
+        res.status(200).json({
+          ok: true,
+          task: {
+            id: task_info.id,
+            title: task_info.title,
+            description: task_info.description,
+            body: task_info.body,
+            link: task_info.link,
+            column_id: column.id,
+            board_id,
+            project_id: column.project_id || '',
+            column_title: column_title_by_id.get(column.id) || ''
+          }
+        });
+        return;
+      }
+      await delay(150);
+    }
+
+    res.status(200).json({ ok: true, task: null });
+  });
+
+  /**
+   * Move a Yougile task to a new column.
+   *
+   * @param {Request} req
+   * @param {Response} res
+   */
+  app.post('/api/integrations/yougile/move-task', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const task_id = String(body.task_id || '').trim();
+    const column_id = String(body.column_id || '').trim();
+    if (!task_id) {
+      res.status(400).json({ ok: false, error: 'Missing task_id' });
+      return;
+    }
+    if (!column_id) {
+      res.status(400).json({ ok: false, error: 'Missing column_id' });
+      return;
+    }
+    const yougile = readIntegrations(root_dir).yougile;
+    if (!yougile || !yougile.api_key) {
+      res.status(400).json({ ok: false, error: 'Yougile not connected' });
+      return;
+    }
+    const client = createYougileClient({
+      base_url: yougile.base_url,
+      api_key: yougile.api_key
+    });
+    const move_result = await moveYougileTaskToColumn(
+      client,
+      task_id,
+      column_id
+    );
+    if (!move_result.ok) {
+      res.status(move_result.status || 502).json({
+        ok: false,
+        error: move_result.error
+      });
+      return;
+    }
+    res.status(200).json({ ok: true });
+  });
+
+  /**
    * Debug endpoint: fetch all tasks without filters and log to server console.
    *
    * @param {Request} _req
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/tasks-all', async (_req, res) => {
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const root_dir = resolveWorkspaceRoot(_req);
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -668,12 +910,13 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.get('/api/integrations/yougile/tasks', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
     const column_id = String(req.query.column_id || '');
     if (!column_id) {
       res.status(400).json({ ok: false, error: 'Missing column_id' });
       return;
     }
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -698,6 +941,7 @@ export function createApp(config) {
    * @param {Response} res
    */
   app.post('/api/integrations/yougile/import', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const column_ids = Array.isArray(body.column_ids)
       ? body.column_ids.map((/** @type {any} */ item) =>
@@ -714,6 +958,12 @@ export function createApp(config) {
           .map((/** @type {any} */ item) => String(item || '').trim())
           .filter((/** @type {string} */ id) => id.length > 0)
       : [];
+    const task_ids = Array.isArray(body.task_ids)
+      ? body.task_ids
+          .map((/** @type {any} */ item) => String(item || '').trim())
+          .filter((/** @type {string} */ id) => id.length > 0)
+      : [];
+    const allowed_task_ids = task_ids.length > 0 ? new Set(task_ids) : null;
     const cleaned_columns = column_ids.filter(
       (/** @type {string} */ id) => id.length > 0
     );
@@ -721,7 +971,7 @@ export function createApp(config) {
       res.status(400).json({ ok: false, error: 'Missing column_ids' });
       return;
     }
-    const yougile = readIntegrations(config.root_dir).yougile;
+    const yougile = readIntegrations(root_dir).yougile;
     if (!yougile || !yougile.api_key) {
       res.status(400).json({ ok: false, error: 'Yougile not connected' });
       return;
@@ -730,6 +980,8 @@ export function createApp(config) {
       base_url: yougile.base_url,
       api_key: yougile.api_key
     });
+    const severity_by_value_id = await fetchYougileSeverityValueMap(client);
+    const sticker_value_map = await fetchYougileStickerValueMap(client);
 
     /** @type {Map<string, YougileTaskInfo>} */
     const tasks_by_id = new Map();
@@ -752,6 +1004,9 @@ export function createApp(config) {
         if (!task_info) {
           continue;
         }
+        if (allowed_task_ids && !allowed_task_ids.has(task_info.id)) {
+          continue;
+        }
         if (
           !passesYougileTaskFilters(task_info, assignee_ids, sticker_value_ids)
         ) {
@@ -765,6 +1020,10 @@ export function createApp(config) {
 
     const tasks = Array.from(tasks_by_id.values());
     if (tasks.length === 0) {
+      if (allowed_task_ids) {
+        res.status(400).json({ ok: false, error: 'No tasks selected' });
+        return;
+      }
       res.status(200).json({ ok: true, created_count: 0 });
       return;
     }
@@ -773,26 +1032,36 @@ export function createApp(config) {
     /** @type {Array<{ id: string, title: string, error: string }>} */
     const errors = [];
     let created_count = 0;
+    let skipped_count = 0;
+    /** @type {Set<string>} */
+    const existing_external_refs = await fetchExistingExternalRefs(root_dir);
     for (const task of tasks) {
       const title = task.title || task.id || 'Задача Yougile';
+      const issue_body = buildYougileIssueBody(task);
+      const labels = buildStickerLabels(task, sticker_value_map);
       const priority = resolveSeverityPriority(
         task,
         severity_by_value_id,
         default_priority
       );
       /** @type {string[]} */
-      const args = [
-        'create',
-        title,
-        '-t',
-        'task',
-        '-p',
-        String(priority)
-      ];
-      if (task.body) {
-        args.push('-d', task.body);
+      const args = ['create', title, '-t', 'task', '-p', String(priority)];
+      if (task.id) {
+        const external_ref = `yougile:${task.id}`;
+        if (existing_external_refs.has(external_ref)) {
+          skipped_count += 1;
+          continue;
+        }
+        existing_external_refs.add(external_ref);
+        args.push('--external-ref', external_ref);
       }
-      const result = await runBd(args, { cwd: config.root_dir });
+      if (issue_body) {
+        args.push('-d', issue_body);
+      }
+      if (labels.length > 0) {
+        args.push('-l', labels.join(','));
+      }
+      const result = await runBd(args, { cwd: root_dir });
       if (result.code !== 0) {
         errors.push({
           id: task.id,
@@ -808,12 +1077,13 @@ export function createApp(config) {
       res.status(207).json({
         ok: false,
         created_count,
+        skipped_count,
         error_count: errors.length,
         errors
       });
       return;
     }
-    res.status(200).json({ ok: true, created_count });
+    res.status(200).json({ ok: true, created_count, skipped_count });
   });
 
   // Register workspace endpoint - allows CLI to register workspaces dynamically
@@ -1011,9 +1281,24 @@ async function fetchYougileColumnsForBoard(client, board_id) {
 }
 
 /**
+ * @param {ReturnType<typeof createYougileClient>} client
+ * @returns {Promise<Array<{ id: string, title: string, board_id: string, board_title: string, project_id: string }>>}
+ */
+async function fetchYougileColumnsAll(client) {
+  const columns_result = await fetchYougileList(client, [
+    '/columns',
+    '/column'
+  ]);
+  if (!columns_result.ok) {
+    return [];
+  }
+  return normalizeYougileColumns(columns_result.data, new Map());
+}
+
+/**
  * @param {unknown} data
  * @param {Map<string, string>} board_title_by_id
- * @returns {Array<{ id: string, title: string, board_id: string, board_title: string }>}
+ * @returns {Array<{ id: string, title: string, board_id: string, board_title: string, project_id: string }>}
  */
 function normalizeYougileColumns(data, board_title_by_id) {
   const items = normalizeYougileList(data);
@@ -1023,10 +1308,14 @@ function normalizeYougileColumns(data, board_title_by_id) {
       const board_id = normalizeYougileId(
         any.boardId || any.board_id || any.BoardId || ''
       );
+      const project_id = normalizeYougileId(
+        any.projectId || any.project_id || any.ProjectId || ''
+      );
       return {
         id: normalizeYougileId(any.id || any.Id || ''),
         title: normalizeYougileTitle(any.title || any.Title || ''),
         board_id,
+        project_id,
         board_title: board_title_by_id.get(board_id) || ''
       };
     })
@@ -1296,6 +1585,59 @@ async function fetchYougileSeverityValueMap(client) {
 }
 
 /**
+ * Fetch all sticker value states and build value-id -> label map.
+ *
+ * @param {ReturnType<typeof createYougileClient>} client
+ * @returns {Promise<Map<string, { sticker_title: string, value_title: string }>>}
+ */
+async function fetchYougileStickerValueMap(client) {
+  const list_result = await fetchYougileList(client, [
+    '/string-stickers',
+    '/string-sticker'
+  ]);
+  if (!list_result.ok) {
+    return new Map();
+  }
+  const items = normalizeYougileList(list_result.data);
+  /** @type {Map<string, { sticker_title: string, value_title: string }>} */
+  const sticker_value_map = new Map();
+  for (const item of items) {
+    const any = /** @type {any} */ (item);
+    const sticker_title = normalizeYougileTitle(
+      any.title || any.Title || any.name || ''
+    );
+    const sticker_id = normalizeYougileId(any.id || any.Id || '');
+    /** @type {Array<{ id: string, title: string }>} */
+    let states = Array.isArray(any.states) ? any.states : [];
+    if (states.length === 0 && sticker_id) {
+      const states_result = await fetchYougileList(client, [
+        `/string-stickers/${sticker_id}/states`,
+        `/string-sticker/${sticker_id}/states`
+      ]);
+      if (!states_result.ok) {
+        continue;
+      }
+      states = normalizeYougileList(states_result.data);
+    }
+    for (const state of states) {
+      const state_any = /** @type {any} */ (state);
+      const value_id = normalizeYougileId(state_any.id || state_any.Id || '');
+      const value_title = normalizeYougileTitle(
+        state_any.title || state_any.Title || state_any.name || ''
+      );
+      if (!value_id) {
+        continue;
+      }
+      sticker_value_map.set(value_id, {
+        sticker_title,
+        value_title
+      });
+    }
+  }
+  return sticker_value_map;
+}
+
+/**
  * @param {YougileTaskInfo} task_info
  * @param {Map<string, string>} severity_by_value_id
  * @param {number} fallback_priority
@@ -1402,6 +1744,144 @@ async function fetchYougileTasks(client, column_id) {
     status: 404,
     error: { code: 'yougile_not_found', message: 'Tasks not found' }
   };
+}
+
+/**
+ * Fetch a single Yougile task by id using candidate paths.
+ *
+ * @param {ReturnType<typeof createYougileClient>} client
+ * @param {string} task_id
+ * @returns {ReturnType<typeof fetchYougileList>}
+ */
+async function fetchYougileTaskById(client, task_id) {
+  /** @type {Array<{ path: string }>} */
+  const attempts = [
+    { path: `/tasks/${task_id}` },
+    { path: `/task/${task_id}` }
+  ];
+  /** @type {Awaited<ReturnType<typeof fetchYougileList>>} */
+  let last = {
+    ok: false,
+    status: 404,
+    error: { code: 'yougile_not_found', message: 'Task not found' }
+  };
+  for (const attempt of attempts) {
+    const res = await client.request({ path: attempt.path });
+    if (res.ok) {
+      return res;
+    }
+    last = res;
+    if (res.status !== 404) {
+      return res;
+    }
+  }
+  return last;
+}
+
+/**
+ * @param {ReturnType<typeof createYougileClient>} client
+ * @param {string} task_id
+ * @param {string} column_id
+ * @returns {ReturnType<typeof fetchYougileList>}
+ */
+async function moveYougileTaskToColumn(client, task_id, column_id) {
+  /** @type {Array<{ path: string, method: 'PATCH' | 'PUT', body: Record<string, string> }>} */
+  const attempts = [
+    {
+      path: `/tasks/${task_id}`,
+      method: 'PATCH',
+      body: { columnId: column_id }
+    },
+    {
+      path: `/tasks/${task_id}`,
+      method: 'PATCH',
+      body: { column_id }
+    },
+    {
+      path: `/task/${task_id}`,
+      method: 'PATCH',
+      body: { columnId: column_id }
+    },
+    {
+      path: `/task/${task_id}`,
+      method: 'PATCH',
+      body: { column_id }
+    },
+    {
+      path: `/tasks/${task_id}`,
+      method: 'PUT',
+      body: { columnId: column_id }
+    },
+    {
+      path: `/tasks/${task_id}`,
+      method: 'PUT',
+      body: { column_id }
+    },
+    {
+      path: `/task/${task_id}`,
+      method: 'PUT',
+      body: { columnId: column_id }
+    },
+    {
+      path: `/task/${task_id}`,
+      method: 'PUT',
+      body: { column_id }
+    }
+  ];
+  /** @type {Awaited<ReturnType<typeof fetchYougileList>>} */
+  let last = {
+    ok: false,
+    status: 404,
+    error: { code: 'yougile_not_found', message: 'Task not found' }
+  };
+  for (const attempt of attempts) {
+    const res = await client.request({
+      path: attempt.path,
+      method: attempt.method,
+      body: attempt.body
+    });
+    if (res.ok) {
+      return res;
+    }
+    last = res;
+    if (res.status !== 404) {
+      return res;
+    }
+  }
+  return last;
+}
+
+/**
+ * @param {unknown} data
+ * @returns {any}
+ */
+function extractYougileTaskPayload(data) {
+  if (Array.isArray(data)) {
+    return data[0];
+  }
+  if (data && typeof data === 'object') {
+    const any = /** @type {any} */ (data);
+    if (any.task) {
+      return any.task;
+    }
+    if (any.Task) {
+      return any.Task;
+    }
+    if (Array.isArray(any.items)) {
+      return any.items[0];
+    }
+  }
+  return data;
+}
+
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 /**
@@ -1631,6 +2111,86 @@ function buildYougileTaskBody(description, link) {
     parts.push(link.trim());
   }
   return parts.filter((part) => part.length > 0).join('\n\n');
+}
+
+/**
+ * @param {YougileTaskInfo} task
+ * @returns {string}
+ */
+function buildYougileIssueBody(task) {
+  const base = task.body ? task.body.trim() : '';
+  const id_line = task.id ? `Yougile ID: ${task.id}` : '';
+  if (base && id_line) {
+    return `${base}\n\n${id_line}`;
+  }
+  return base || id_line;
+}
+
+/**
+ * @param {YougileTaskInfo} task
+ * @param {Map<string, { sticker_title: string, value_title: string }>} value_map
+ * @returns {string[]}
+ */
+function buildStickerLabels(task, value_map) {
+  if (!task || !Array.isArray(task.sticker_value_ids)) {
+    return [];
+  }
+  /** @type {string[]} */
+  const labels = [];
+  for (const value_id of task.sticker_value_ids) {
+    const entry = value_map.get(value_id);
+    if (!entry) {
+      continue;
+    }
+    const sticker_title = String(entry.sticker_title || '').trim();
+    const value_title = String(entry.value_title || '').trim();
+    let label = '';
+    if (sticker_title && value_title) {
+      label = `${sticker_title}: ${value_title}`;
+    } else {
+      label = sticker_title || value_title;
+    }
+    if (!label) {
+      continue;
+    }
+    const sanitized = sanitizeLabel(label);
+    if (sanitized) {
+      labels.push(sanitized);
+    }
+  }
+  return Array.from(new Set(labels));
+}
+
+/**
+ * @param {string} label
+ * @returns {string}
+ */
+function sanitizeLabel(label) {
+  const sanitized = label.replace(/\\s+/g, ' ').replace(/,/g, ' ').trim();
+  return sanitized;
+}
+
+/**
+ * @param {string} root_dir
+ * @returns {Promise<Set<string>>}
+ */
+async function fetchExistingExternalRefs(root_dir) {
+  /** @type {Set<string>} */
+  const refs = new Set();
+  const list_result = await runBdJson(['list', '--all', '--json', '-n', '0'], {
+    cwd: root_dir
+  });
+  if (list_result.code !== 0 || !Array.isArray(list_result.stdoutJson)) {
+    return refs;
+  }
+  for (const item of list_result.stdoutJson) {
+    const any = /** @type {any} */ (item);
+    const ref = String(any.external_ref || any.externalRef || '').trim();
+    if (ref) {
+      refs.add(ref);
+    }
+  }
+  return refs;
 }
 
 /**

@@ -21,24 +21,23 @@ describe('yougile client', () => {
   test('sends authorization header and query params', async () => {
     /** @type {Array<{ url: string, options: any }>} */
     const calls = [];
-    const fetch_fn = /** @type {any} */ (async (
-      /** @type {any} */ url,
-      /** @type {any} */ options
-    ) => {
-      calls.push({ url: String(url), options });
-      return {
-        ok: true,
-        status: 200,
-        headers: {
-          get() {
-            return 'application/json';
+    const fetch_fn = /** @type {any} */ (
+      async (/** @type {any} */ url, /** @type {any} */ options) => {
+        calls.push({ url: String(url), options });
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get() {
+              return 'application/json';
+            }
+          },
+          async json() {
+            return { ok: true };
           }
-        },
-        async json() {
-          return { ok: true };
-        }
-      };
-    });
+        };
+      }
+    );
 
     const client = createYougileClient({
       base_url: 'https://example.com',
@@ -57,20 +56,22 @@ describe('yougile client', () => {
   });
 
   test('returns structured error for non-ok responses', async () => {
-    const fetch_fn = /** @type {any} */ (async () => {
-      return {
-        ok: false,
-        status: 403,
-        headers: {
-          get() {
-            return 'application/json';
+    const fetch_fn = /** @type {any} */ (
+      async () => {
+        return {
+          ok: false,
+          status: 403,
+          headers: {
+            get() {
+              return 'application/json';
+            }
+          },
+          async json() {
+            return { message: 'forbidden' };
           }
-        },
-        async json() {
-          return { message: 'forbidden' };
-        }
-      };
-    });
+        };
+      }
+    );
 
     const client = createYougileClient({
       base_url: 'https://example.com',
@@ -90,24 +91,23 @@ describe('yougile client', () => {
   test('auth key request posts login/password/companyId', async () => {
     /** @type {Array<{ url: string, options: any }>} */
     const calls = [];
-    const fetch_fn = /** @type {any} */ (async (
-      /** @type {any} */ url,
-      /** @type {any} */ options
-    ) => {
-      calls.push({ url: String(url), options });
-      return {
-        ok: true,
-        status: 200,
-        headers: {
-          get() {
-            return 'application/json';
+    const fetch_fn = /** @type {any} */ (
+      async (/** @type {any} */ url, /** @type {any} */ options) => {
+        calls.push({ url: String(url), options });
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get() {
+              return 'application/json';
+            }
+          },
+          async json() {
+            return { key: 'api-key' };
           }
-        },
-        async json() {
-          return { key: 'api-key' };
-        }
-      };
-    });
+        };
+      }
+    );
 
     const result = await requestYougileApiKey({
       base_url: 'https://yougile.com',

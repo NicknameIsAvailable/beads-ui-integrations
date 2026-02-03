@@ -497,7 +497,9 @@ export function bootstrap(root_element) {
       try {
         const result = await tracked_send('generate-analytics');
         const payload =
-          result && typeof result === 'object' ? /** @type {any} */ (result) : null;
+          result && typeof result === 'object'
+            ? /** @type {any} */ (result)
+            : null;
         const dashboard_html =
           payload && typeof payload.html === 'string' ? payload.html : '';
         if (!dashboard_html) {

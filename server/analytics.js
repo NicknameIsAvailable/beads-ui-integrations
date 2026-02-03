@@ -185,7 +185,11 @@ function priorityLabel(priority) {
  */
 export async function buildAnalyticsDashboard(root_dir) {
   const list_result = await runBdJson(['list', '--json'], { cwd: root_dir });
-  if (!list_result || list_result.code !== 0 || !('stdoutJson' in list_result)) {
+  if (
+    !list_result ||
+    list_result.code !== 0 ||
+    !('stdoutJson' in list_result)
+  ) {
     const error_message = String(list_result?.stderr || 'bd list failed');
     return `<!doctype html><html><body><h1>Analytics Error</h1><pre>${escapeHtml(
       error_message
@@ -410,9 +414,7 @@ export async function buildAnalyticsDashboard(root_dir) {
             entry.durations.length
           : 0;
       const reopen_rate =
-        entry.closed_count > 0
-          ? entry.reopen_count / entry.closed_count
-          : -1;
+        entry.closed_count > 0 ? entry.reopen_count / entry.closed_count : -1;
       return `<tr><td>${escapeHtml(
         priorityLabel(priority)
       )}</td><td>${entry.closed_count}</td><td>${entry.reopen_count}</td><td>${formatPercent(

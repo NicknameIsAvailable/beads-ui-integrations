@@ -270,10 +270,10 @@ export function createIntegrationsView(mount_element) {
                         <button
                           type="button"
                           class="btn primary"
-                        @click=${(/** @type {MouseEvent} */ ev) => {
-                          ev.stopPropagation();
-                          openDialogFor(definition);
-                        }}
+                          @click=${(/** @type {MouseEvent} */ ev) => {
+                            ev.stopPropagation();
+                            openDialogFor(definition);
+                          }}
                         >
                           Подключить
                         </button>

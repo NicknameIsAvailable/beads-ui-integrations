@@ -11,7 +11,17 @@
  * @returns {Promise<ApiResult>}
  */
 async function requestJson(url, options = {}) {
-  const res = await fetch(url, options);
+  const workspace_headers = getWorkspaceHeaders();
+  const merged_headers = {
+    ...workspace_headers,
+    ...(options.headers
+      ? /** @type {Record<string, string>} */ (options.headers)
+      : {})
+  };
+  const res = await fetch(url, {
+    ...options,
+    headers: merged_headers
+  });
   const status = res.status;
   let data = null;
   try {
@@ -20,6 +30,17 @@ async function requestJson(url, options = {}) {
     data = null;
   }
   return { ok: res.ok, status, data };
+}
+
+/**
+ * @returns {Record<string, string>}
+ */
+function getWorkspaceHeaders() {
+  const stored_path = window.localStorage.getItem('beads-ui.workspace');
+  if (!stored_path) {
+    return {};
+  }
+  return { 'x-beads-workspace': stored_path };
 }
 
 /**
@@ -73,6 +94,36 @@ export async function fetchIntegrationBoards(integration_id, project_id) {
   );
   url.searchParams.set('project_id', project_id);
   return requestJson(url.toString());
+}
+
+/**
+ * @param {string} integration_id
+ * @param {{ board_id?: string, task_id: string }} payload
+ * @returns {Promise<ApiResult>}
+ */
+export async function fetchIntegrationTaskSearch(integration_id, payload) {
+  const url = new URL(
+    `/api/integrations/${integration_id}/task-search`,
+    window.location.origin
+  );
+  if (payload.board_id) {
+    url.searchParams.set('board_id', payload.board_id);
+  }
+  url.searchParams.set('task_id', payload.task_id);
+  return requestJson(url.toString());
+}
+
+/**
+ * @param {string} integration_id
+ * @param {{ task_id: string, column_id: string }} payload
+ * @returns {Promise<ApiResult>}
+ */
+export async function moveIntegrationTask(integration_id, payload) {
+  return requestJson(`/api/integrations/${integration_id}/move-task`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
 }
 
 /**
@@ -158,7 +209,7 @@ export async function fetchIntegrationPreview(integration_id, payload) {
 
 /**
  * @param {string} integration_id
- * @param {{ project_id: string, team_id?: string, column_ids: string[], assignee_ids?: string[], sticker_value_ids?: string[] }} payload
+ * @param {{ project_id: string, team_id?: string, column_ids: string[], assignee_ids?: string[], sticker_value_ids?: string[], task_ids?: string[] }} payload
  * @returns {Promise<ApiResult>}
  */
 export async function runImport(integration_id, payload) {
