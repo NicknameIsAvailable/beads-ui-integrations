@@ -1063,10 +1063,15 @@ export function createApp(config) {
       }
       const result = await runBd(args, { cwd: root_dir });
       if (result.code !== 0) {
+        const failure_message = `${result.stderr || ''}\n${result.stdout || ''}`;
+        if (isExternalRefDuplicateError(failure_message)) {
+          skipped_count += 1;
+          continue;
+        }
         errors.push({
           id: task.id,
           title,
-          error: result.stderr || 'bd failed'
+          error: result.stderr || result.stdout || 'bd failed'
         });
         continue;
       }
@@ -2191,6 +2196,20 @@ async function fetchExistingExternalRefs(root_dir) {
     }
   }
   return refs;
+}
+
+/**
+ * @param {string} error_message
+ * @returns {boolean}
+ */
+export function isExternalRefDuplicateError(error_message) {
+  const normalized_message = String(error_message || '').toLowerCase();
+  if (!normalized_message) {
+    return false;
+  }
+  return normalized_message.includes(
+    'unique constraint failed: issues.external_ref'
+  );
 }
 
 /**
