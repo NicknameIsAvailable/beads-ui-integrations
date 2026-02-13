@@ -81,11 +81,11 @@ describe('views/board closed filter', () => {
     );
     await view.load();
 
-    // Default filter: Today → only C-3 visible
+    // Default filter: all time
     let closed_ids = Array.from(
       mount.querySelectorAll('#closed-col .board-card .mono')
     ).map((el) => el.textContent?.trim());
-    expect(closed_ids).toEqual(['C-3']);
+    expect(closed_ids).toEqual(['C-3', 'C-2', 'C-1']);
 
     // Change to Last 3 days → C-3 (today) and C-2 (yesterday)
     const select = /** @type {HTMLSelectElement} */ (
@@ -106,5 +106,53 @@ describe('views/board closed filter', () => {
       mount.querySelectorAll('#closed-col .board-card .mono')
     ).map((el) => el.textContent?.trim());
     expect(closed_ids).toEqual(['C-3', 'C-2', 'C-1']);
+  });
+
+  test('uses updated_at fallback when closed_at is missing', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const now = Date.now();
+    const one_day = 24 * 60 * 60 * 1000;
+    const issues = [
+      {
+        id: 'C-raw-old',
+        title: 'old',
+        closed_at: now - 10 * one_day
+      },
+      {
+        id: 'C-fallback',
+        title: 'fallback',
+        updated_at: now - 1 * one_day
+      }
+    ];
+    const issue_stores = createTestIssueStores();
+    issue_stores.getStore('tab:board:closed').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:closed',
+      revision: 1,
+      issues
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issue_stores
+    );
+    await view.load();
+
+    const select = /** @type {HTMLSelectElement} */ (
+      mount.querySelector('#closed-filter')
+    );
+    select.value = '3';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const closed_ids = Array.from(
+      mount.querySelectorAll('#closed-col .board-card')
+    ).map((el) => el.getAttribute('data-issue-id'));
+    expect(closed_ids).toEqual(['C-fallback']);
   });
 });

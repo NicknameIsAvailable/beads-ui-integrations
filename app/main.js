@@ -409,15 +409,15 @@ export function bootstrap(root_element) {
       log('view parse error: %o', err);
     }
     // Load board preferences
-    /** @type {{ closed_filter: 'today'|'3'|'7' }} */
-    let persistedBoard = { closed_filter: 'today' };
+    /** @type {{ closed_filter: 'all'|'today'|'3'|'7' }} */
+    let persistedBoard = { closed_filter: 'all' };
     try {
       const raw_board = window.localStorage.getItem('beads-ui.board');
       if (raw_board) {
         const obj = JSON.parse(raw_board);
         if (obj && typeof obj === 'object') {
-          const cf = String(obj.closed_filter || 'today');
-          if (cf === 'today' || cf === '3' || cf === '7') {
+          const cf = String(obj.closed_filter || 'all');
+          if (cf === 'all' || cf === 'today' || cf === '3' || cf === '7') {
             persistedBoard.closed_filter = cf;
           }
         }

@@ -16,7 +16,7 @@ import { debug } from './utils/logging.js';
  */
 
 /**
- * @typedef {'today'|'3'|'7'} ClosedFilter
+ * @typedef {'all'|'today'|'3'|'7'} ClosedFilter
  */
 
 /**
@@ -61,11 +61,12 @@ export function createStore(initial = {}) {
     },
     board: {
       closed_filter:
+        initial.board?.closed_filter === 'all' ||
         initial.board?.closed_filter === '3' ||
         initial.board?.closed_filter === '7' ||
         initial.board?.closed_filter === 'today'
           ? initial.board?.closed_filter
-          : 'today'
+          : 'all'
     },
     workspace: {
       current: initial.workspace?.current ?? null,

@@ -10,7 +10,9 @@ vi.mock('../data/integrations.js', () => ({
       ]
     }
   })),
-  connectYougile: vi.fn(async () => ({ ok: true, data: {} }))
+  connectYougile: vi.fn(async () => ({ ok: true, data: {} })),
+  disconnectYougile: vi.fn(async () => ({ ok: true, data: {} })),
+  pingYougile: vi.fn(async () => ({ ok: true, data: { probe_count: 1 } }))
 }));
 
 describe('views/integrations detail', () => {

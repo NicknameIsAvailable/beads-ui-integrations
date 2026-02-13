@@ -1191,7 +1191,8 @@ export function createImportDialog() {
                             <input
                               type="checkbox"
                               ?checked=${checked}
-                              @click=${(ev) => ev.stopPropagation()}
+                              @click=${(/** @type {MouseEvent} */ ev) =>
+                                ev.stopPropagation()}
                               @change=${() => toggleTaskSelection(task.id)}
                             />
                             <span>Импортировать</span>

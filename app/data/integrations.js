@@ -68,3 +68,19 @@ export async function connectYougile(payload) {
     body: JSON.stringify(payload)
   });
 }
+
+/**
+ * @returns {Promise<ApiResult>}
+ */
+export async function disconnectYougile() {
+  return requestJson('/api/integrations/yougile/connect', {
+    method: 'DELETE'
+  });
+}
+
+/**
+ * @returns {Promise<ApiResult>}
+ */
+export async function pingYougile() {
+  return requestJson('/api/integrations/yougile/ping');
+}

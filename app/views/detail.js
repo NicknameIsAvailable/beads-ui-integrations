@@ -1,5 +1,11 @@
 // Issue Detail view implementation (lit-html based)
 import { html, render } from 'lit-html';
+import {
+  addIntegrationTaskComment,
+  fetchIntegrationTaskComments,
+  fetchIntegrationTaskSearch,
+  updateIntegrationTask
+} from '../data/import.js';
 import { parseView } from '../router.js';
 import { issueHashFor } from '../utils/issue-url.js';
 import { labelColorStyle } from '../utils/label-color.js';
@@ -48,6 +54,14 @@ function formatCommentDate(dateStr) {
  * @property {number} id
  * @property {string} [author]
  * @property {string} text
+ * @property {string} [created_at]
+ */
+
+/**
+ * @typedef {Object} YougileComment
+ * @property {string} id
+ * @property {string} text
+ * @property {string} [author]
  * @property {string} [created_at]
  */
 
@@ -117,6 +131,20 @@ export function createDetailView(
   let comment_text = '';
   /** @type {boolean} */
   let comment_pending = false;
+  /** @type {YougileComment[]} */
+  let yougile_comments = [];
+  /** @type {boolean} */
+  let yougile_comments_loading = false;
+  /** @type {boolean} */
+  let yougile_comment_pending = false;
+  /** @type {boolean} */
+  let yougile_sync_pending = false;
+  /** @type {boolean} */
+  let yougile_push_pending = false;
+  /** @type {string} */
+  let yougile_comment_text = '';
+  /** @type {string} */
+  let last_yougile_task_id = '';
 
   /** @type {HTMLDialogElement | null} */
   let delete_dialog = null;
@@ -941,6 +969,7 @@ export function createDetailView(
 
   /**
    * @param {string} task_id
+   * @param {string} [task_link]
    * @returns {void}
    */
   function openMoveDialog(task_id, task_link) {
@@ -949,6 +978,236 @@ export function createDetailView(
       return;
     }
     task_search_dialog.openWithTaskId(task_id, task_link || '');
+  }
+
+  /**
+   * @param {string} task_link
+   * @returns {void}
+   */
+  function openYougileTaskLink(task_link) {
+    if (!task_link) {
+      showToast('Ссылка на Yougile не найдена', 'error', 2600);
+      return;
+    }
+    window.open(task_link, '_blank', 'noopener,noreferrer');
+  }
+
+  /**
+   * @param {{ id: string, title: string, description: string, body: string }} task
+   * @returns {Promise<void>}
+   */
+  async function syncIssueFromYougile(task) {
+    if (!current || !task.id) {
+      return;
+    }
+    yougile_sync_pending = true;
+    doRender();
+    try {
+      const search_result = await fetchIntegrationTaskSearch('yougile', {
+        task_id: task.id
+      });
+      if (
+        !search_result.ok ||
+        !search_result.data ||
+        typeof search_result.data !== 'object'
+      ) {
+        showToast(
+          'Не удалось получить данные задачи из Yougile',
+          'error',
+          3200
+        );
+        return;
+      }
+      const task_data = /** @type {any} */ (search_result.data).task;
+      if (!task_data || typeof task_data !== 'object') {
+        showToast('Задача в Yougile не найдена', 'error', 3200);
+        return;
+      }
+      const next_title = String(task_data.title || '').trim();
+      const next_description = String(
+        task_data.body || task_data.description || ''
+      ).trim();
+      let updated_fields_count = 0;
+      if (next_title && next_title !== String(current.title || '').trim()) {
+        await sendFn('edit-text', {
+          id: current.id,
+          field: 'title',
+          value: next_title
+        });
+        current.title = next_title;
+        updated_fields_count += 1;
+      }
+      if (
+        next_description &&
+        next_description !== String(current.description || '').trim()
+      ) {
+        await sendFn('edit-text', {
+          id: current.id,
+          field: 'description',
+          value: next_description
+        });
+        current.description = next_description;
+        updated_fields_count += 1;
+      }
+      if (updated_fields_count > 0) {
+        showToast(
+          `Синхронизировано полей: ${updated_fields_count}`,
+          'success',
+          2600
+        );
+        doRender();
+      } else {
+        showToast('Данные уже актуальны', 'success', 2200);
+      }
+    } catch (err) {
+      log('sync from yougile failed: %o', err);
+      showToast('Ошибка синхронизации с Yougile', 'error', 3200);
+    } finally {
+      yougile_sync_pending = false;
+      doRender();
+    }
+  }
+
+  /**
+   * @param {{ id: string, title: string, description: string }} task
+   * @returns {Promise<void>}
+   */
+  async function pushIssueToYougile(task) {
+    if (!current || !task.id) {
+      return;
+    }
+    yougile_push_pending = true;
+    doRender();
+    try {
+      const current_title = String(current.title || '').trim();
+      const current_description = String(current.description || '').trim();
+      if (!current_title && !current_description) {
+        showToast('Нет данных для отправки в Yougile', 'error', 3000);
+        return;
+      }
+      const result = await updateIntegrationTask('yougile', {
+        task_id: task.id,
+        title: current_title || undefined,
+        description: current_description || undefined
+      });
+      if (!result.ok) {
+        showToast('Не удалось обновить задачу в Yougile', 'error', 3200);
+        return;
+      }
+      showToast('Задача в Yougile обновлена', 'success', 2400);
+    } catch (err) {
+      log('push to yougile failed: %o', err);
+      showToast('Ошибка отправки в Yougile', 'error', 3200);
+    } finally {
+      yougile_push_pending = false;
+      doRender();
+    }
+  }
+
+  /**
+   * @param {string} task_id
+   * @returns {Promise<void>}
+   */
+  async function loadYougileComments(task_id) {
+    if (!task_id) {
+      return;
+    }
+    if (yougile_comments_loading && last_yougile_task_id === task_id) {
+      return;
+    }
+    yougile_comments_loading = true;
+    last_yougile_task_id = task_id;
+    doRender();
+    try {
+      const result = await fetchIntegrationTaskComments('yougile', {
+        task_id,
+        limit: 30
+      });
+      if (!result.ok || !result.data || typeof result.data !== 'object') {
+        showToast('Не удалось загрузить комментарии Yougile', 'error', 3200);
+        return;
+      }
+      const comments_raw = Array.isArray(
+        /** @type {any} */ (result.data).comments
+      )
+        ? /** @type {any[]} */ (/** @type {any} */ (result.data).comments)
+        : [];
+      yougile_comments = comments_raw
+        .map((item, index) => {
+          const any_item = /** @type {any} */ (item);
+          const id_value = String(any_item.id || '').trim();
+          const text_value = String(any_item.text || '').trim();
+          if (!id_value && !text_value) {
+            return null;
+          }
+          return {
+            id: id_value || `yg-${String(index + 1)}`,
+            text: text_value,
+            author: String(any_item.author || '').trim(),
+            created_at: String(any_item.created_at || '').trim()
+          };
+        })
+        .filter((item) => item !== null);
+    } catch (err) {
+      log('load yougile comments failed: %o', err);
+      showToast('Ошибка загрузки комментариев Yougile', 'error', 3200);
+    } finally {
+      yougile_comments_loading = false;
+      doRender();
+    }
+  }
+
+  /**
+   * @param {Event} ev
+   * @returns {void}
+   */
+  function onYougileCommentInput(ev) {
+    const el = /** @type {HTMLTextAreaElement} */ (ev.target);
+    yougile_comment_text = el.value;
+  }
+
+  /**
+   * @param {KeyboardEvent} ev
+   * @param {string} task_id
+   * @returns {void}
+   */
+  function onYougileCommentKeydown(ev, task_id) {
+    if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
+      ev.preventDefault();
+      void onYougileCommentSubmit(task_id);
+    }
+  }
+
+  /**
+   * @param {string} task_id
+   * @returns {Promise<void>}
+   */
+  async function onYougileCommentSubmit(task_id) {
+    const text = String(yougile_comment_text || '').trim();
+    if (!task_id || !text) {
+      return;
+    }
+    yougile_comment_pending = true;
+    doRender();
+    try {
+      const result = await addIntegrationTaskComment('yougile', {
+        task_id,
+        text
+      });
+      if (!result.ok) {
+        showToast('Не удалось добавить комментарий в Yougile', 'error', 3200);
+        return;
+      }
+      yougile_comment_text = '';
+      await loadYougileComments(task_id);
+      showToast('Комментарий добавлен в Yougile', 'success', 2400);
+    } catch (err) {
+      log('add yougile comment failed: %o', err);
+      showToast('Ошибка добавления комментария в Yougile', 'error', 3200);
+    } finally {
+      yougile_comment_pending = false;
+      doRender();
+    }
   }
 
   /**
@@ -1187,6 +1446,21 @@ export function createDetailView(
             <div class="props-card__title">Yougile</div>
             <div class="props-card__row">
               <span class="mono"> ${yougile_task_id || 'ID не найден'} </span>
+              ${yougile_task_link
+                ? html`<a
+                    class="yougile-link"
+                    href=${yougile_task_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    @click=${(/** @type {MouseEvent} */ ev) => {
+                      ev.preventDefault();
+                      openYougileTaskLink(yougile_task_link);
+                    }}
+                    >Открыть</a
+                  >`
+                : null}
+            </div>
+            <div class="yougile-actions">
               <button
                 class="btn"
                 ?disabled=${!yougile_task_id}
@@ -1194,6 +1468,86 @@ export function createDetailView(
                   openMoveDialog(yougile_task_id, yougile_task_link)}
               >
                 Переместить
+              </button>
+              <button
+                class="btn"
+                ?disabled=${!yougile_task_id || yougile_sync_pending}
+                @click=${() =>
+                  syncIssueFromYougile({
+                    id: yougile_task_id,
+                    title: issue.title || '',
+                    description: issue.description || '',
+                    body: issue.description || ''
+                  })}
+              >
+                ${yougile_sync_pending ? 'Синхронизация…' : 'Синхронизировать'}
+              </button>
+              <button
+                class="btn"
+                ?disabled=${!yougile_task_id || yougile_push_pending}
+                @click=${() =>
+                  pushIssueToYougile({
+                    id: yougile_task_id,
+                    title: issue.title || '',
+                    description: issue.description || ''
+                  })}
+              >
+                ${yougile_push_pending ? 'Отправка…' : 'Отправить в Yougile'}
+              </button>
+              <button
+                class="btn"
+                ?disabled=${!yougile_task_id || yougile_comments_loading}
+                @click=${() => loadYougileComments(yougile_task_id)}
+              >
+                ${yougile_comments_loading
+                  ? 'Обновление…'
+                  : 'Обновить комментарии'}
+              </button>
+            </div>
+            <div class="yougile-comments">
+              ${yougile_comments_loading
+                ? html`<div class="muted">Загрузка комментариев...</div>`
+                : yougile_comments.length === 0
+                  ? html`<div class="muted">Нет комментариев Yougile</div>`
+                  : html`<ul class="yougile-comments__list">
+                      ${yougile_comments.map(
+                        (comment_item) =>
+                          html`<li class="yougile-comments__item">
+                            <div class="yougile-comments__meta">
+                              <span>${comment_item.author || 'Unknown'}</span>
+                              <span
+                                >${formatCommentDate(
+                                  comment_item.created_at
+                                )}</span
+                              >
+                            </div>
+                            <div class="yougile-comments__text">
+                              ${comment_item.text || ''}
+                            </div>
+                          </li>`
+                      )}
+                    </ul>`}
+            </div>
+            <div class="yougile-comment-form">
+              <textarea
+                rows="2"
+                placeholder="Комментарий в Yougile (Ctrl+Enter)"
+                .value=${yougile_comment_text}
+                @input=${onYougileCommentInput}
+                @keydown=${(/** @type {KeyboardEvent} */ ev) =>
+                  onYougileCommentKeydown(ev, yougile_task_id)}
+                ?disabled=${!yougile_task_id || yougile_comment_pending}
+              ></textarea>
+              <button
+                class="btn"
+                ?disabled=${!yougile_task_id ||
+                yougile_comment_pending ||
+                !yougile_comment_text.trim()}
+                @click=${() => onYougileCommentSubmit(yougile_task_id)}
+              >
+                ${yougile_comment_pending
+                  ? 'Отправка…'
+                  : 'Добавить комментарий'}
               </button>
             </div>
           </div>`
@@ -1389,6 +1743,15 @@ export function createDetailView(
       renderPlaceholder(current_id ? 'Loading…' : 'No issue selected');
       return;
     }
+    const yougile_task_id = getYougileTaskId(current);
+    if (
+      yougile_task_id &&
+      yougile_task_id !== last_yougile_task_id &&
+      !yougile_comments_loading
+    ) {
+      yougile_comments = [];
+      void loadYougileComments(yougile_task_id);
+    }
     render(detailTemplate(current), mount_element);
   }
 
@@ -1565,6 +1928,13 @@ export function createDetailView(
       pending = false;
       comment_text = '';
       comment_pending = false;
+      yougile_comments = [];
+      yougile_comments_loading = false;
+      yougile_comment_pending = false;
+      yougile_comment_text = '';
+      yougile_sync_pending = false;
+      yougile_push_pending = false;
+      last_yougile_task_id = '';
       doRender();
 
       // Fetch comments if not already present
@@ -1581,6 +1951,13 @@ export function createDetailView(
       }
     },
     clear() {
+      yougile_comments = [];
+      yougile_comment_text = '';
+      yougile_comments_loading = false;
+      yougile_comment_pending = false;
+      yougile_sync_pending = false;
+      yougile_push_pending = false;
+      last_yougile_task_id = '';
       renderPlaceholder('Select an issue to view details');
     },
     destroy() {

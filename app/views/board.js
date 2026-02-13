@@ -78,18 +78,18 @@ export function createBoardView(
 
   /**
    * Closed column filter mode.
+   * 'all' → all closed items
    * 'today' → items with closed_at since local day start
    * '3' → last 3 days; '7' → last 7 days
    *
-   * @type {'today'|'3'|'7'}
+   * @type {'all'|'today'|'3'|'7'}
    */
-  let closed_filter_mode = 'today';
+  let closed_filter_mode = 'all';
   if (store) {
     try {
       const s = store.getState();
-      const cf =
-        s && s.board ? String(s.board.closed_filter || 'today') : 'today';
-      if (cf === 'today' || cf === '3' || cf === '7') {
+      const cf = s && s.board ? String(s.board.closed_filter || 'all') : 'all';
+      if (cf === 'all' || cf === 'today' || cf === '3' || cf === '7') {
         closed_filter_mode = /** @type {any} */ (cf);
       }
     } catch {
@@ -180,6 +180,9 @@ export function createBoardView(
                   aria-label="Filter closed issues"
                   @change=${onClosedFilterChange}
                 >
+                  <option value="all" ?selected=${closed_filter_mode === 'all'}>
+                    All time
+                  </option>
                   <option
                     value="today"
                     ?selected=${closed_filter_mode === 'today'}
@@ -470,8 +473,11 @@ export function createBoardView(
     const ids = Array.from(selected_ids);
     try {
       const result = await transport('delete-issues', { ids });
-      const deleted = Array.isArray(result?.deleted) ? result.deleted : [];
-      const failed = Array.isArray(result?.failed) ? result.failed : [];
+      const any_result = /** @type {any} */ (result);
+      const deleted = Array.isArray(any_result?.deleted)
+        ? any_result.deleted
+        : [];
+      const failed = Array.isArray(any_result?.failed) ? any_result.failed : [];
       if (deleted.length > 0) {
         showToast('Задачи удалены', 'success', 2400);
         /** @type {Set<string>} */
@@ -830,9 +836,12 @@ export function createBoardView(
   function applyClosedFilter() {
     log('applyClosedFilter %s', closed_filter_mode);
     /** @type {IssueLite[]} */
-    let items = Array.isArray(list_closed_raw) ? [...list_closed_raw] : [];
+    let items = Array.isArray(list_closed_raw)
+      ? list_closed_raw.map((item) => withResolvedClosedAt(item))
+      : [];
     const now = new Date();
-    let since_ts = 0;
+    /** @type {number | null} */
+    let since_ts = null;
     if (closed_filter_mode === 'today') {
       const start = new Date(
         now.getFullYear(),
@@ -849,17 +858,40 @@ export function createBoardView(
     } else if (closed_filter_mode === '7') {
       since_ts = now.getTime() - 7 * 24 * 60 * 60 * 1000;
     }
-    items = items.filter((it) => {
-      const s = Number.isFinite(it.closed_at)
-        ? /** @type {number} */ (it.closed_at)
-        : NaN;
-      if (!Number.isFinite(s)) {
-        return false;
-      }
-      return s >= since_ts;
-    });
+    if (since_ts !== null) {
+      items = items.filter((item) => {
+        const closed_at = Number(item.closed_at);
+        if (!Number.isFinite(closed_at)) {
+          return false;
+        }
+        return closed_at >= since_ts;
+      });
+    }
     items.sort(cmpClosedDesc);
     list_closed = items;
+  }
+
+  /**
+   * Ensure every closed-card candidate has a stable numeric `closed_at` for
+   * filtering/sorting. Some backends provide `status=closed` without `closed_at`.
+   *
+   * @param {IssueLite} item
+   * @returns {IssueLite}
+   */
+  function withResolvedClosedAt(item) {
+    const closed_at = Number(item.closed_at);
+    if (Number.isFinite(closed_at) && closed_at > 0) {
+      return item;
+    }
+    const updated_at = Number(item.updated_at);
+    if (Number.isFinite(updated_at) && updated_at > 0) {
+      return { ...item, closed_at: updated_at };
+    }
+    const created_at = Number(item.created_at);
+    if (Number.isFinite(created_at) && created_at > 0) {
+      return { ...item, closed_at: created_at };
+    }
+    return { ...item, closed_at: 0 };
   }
 
   /**
@@ -868,8 +900,12 @@ export function createBoardView(
   function onClosedFilterChange(ev) {
     try {
       const el = /** @type {HTMLSelectElement} */ (ev.target);
-      const v = String(el.value || 'today');
-      closed_filter_mode = v === '3' || v === '7' ? v : 'today';
+      const v = String(el.value || 'all');
+      if (v === 'all' || v === '3' || v === '7' || v === 'today') {
+        closed_filter_mode = v;
+      } else {
+        closed_filter_mode = 'all';
+      }
       log('closed filter %s', closed_filter_mode);
       if (store) {
         try {

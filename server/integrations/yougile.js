@@ -5,7 +5,7 @@
 /**
  * @typedef {Object} YougileRequestOptions
  * @property {string} path
- * @property {'GET'|'POST'|'PUT'|'DELETE'} [method]
+ * @property {'GET'|'POST'|'PUT'|'PATCH'|'DELETE'} [method]
  * @property {Record<string, string | number | boolean>} [query]
  * @property {unknown} [body]
  */

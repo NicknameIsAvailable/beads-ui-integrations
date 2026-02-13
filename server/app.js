@@ -7,6 +7,7 @@ import path from 'node:path';
 import { runBd, runBdJson } from './bd.js';
 import { listIntegrations } from './integrations/registry.js';
 import {
+  clearYougileConnection,
   getIntegrationStatusList,
   readIntegrations,
   saveYougileConnection
@@ -179,6 +180,54 @@ export function createApp(config) {
         error: err && /** @type {any} */ (err).message
       });
     }
+  });
+
+  /**
+   * Remove stored Yougile credentials for the current workspace.
+   *
+   * @param {Request} req
+   * @param {Response} res
+   */
+  app.delete('/api/integrations/yougile/connect', (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
+    clearYougileConnection(root_dir);
+    res.status(200).json({ ok: true, connected: false });
+  });
+
+  /**
+   * Validate Yougile credentials by making a lightweight API request.
+   *
+   * @param {Request} req
+   * @param {Response} res
+   */
+  app.get('/api/integrations/yougile/ping', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
+    const yougile = readIntegrations(root_dir).yougile;
+    if (!yougile || !yougile.api_key) {
+      res.status(400).json({ ok: false, error: 'Yougile not connected' });
+      return;
+    }
+    const client = createYougileClient({
+      base_url: yougile.base_url,
+      api_key: yougile.api_key
+    });
+    const probe_result = await fetchYougileList(client, ['/users', '/user'], {
+      limit: 1
+    });
+    if (!probe_result.ok) {
+      res.status(probe_result.status || 502).json({
+        ok: false,
+        error: probe_result.error
+      });
+      return;
+    }
+    const items = normalizeYougileList(probe_result.data);
+    res.status(200).json({
+      ok: true,
+      connected: true,
+      base_url: yougile.base_url,
+      probe_count: items.length
+    });
   });
 
   /**
@@ -830,6 +879,158 @@ export function createApp(config) {
     }
 
     res.status(200).json({ ok: true, task: null });
+  });
+
+  /**
+   * List comments for a Yougile task.
+   *
+   * @param {Request} req
+   * @param {Response} res
+   */
+  app.get('/api/integrations/yougile/task-comments', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
+    const task_id = String(req.query.task_id || '').trim();
+    if (!task_id) {
+      res.status(400).json({ ok: false, error: 'Missing task_id' });
+      return;
+    }
+    const limit_raw = Number(req.query.limit);
+    const limit = Number.isFinite(limit_raw)
+      ? Math.max(1, Math.min(200, Math.floor(limit_raw)))
+      : 50;
+    const yougile = readIntegrations(root_dir).yougile;
+    if (!yougile || !yougile.api_key) {
+      res.status(400).json({ ok: false, error: 'Yougile not connected' });
+      return;
+    }
+    const client = createYougileClient({
+      base_url: yougile.base_url,
+      api_key: yougile.api_key
+    });
+    const comments_result = await fetchYougileTaskComments(
+      client,
+      task_id,
+      limit
+    );
+    if (!comments_result.ok) {
+      res.status(comments_result.status || 502).json({
+        ok: false,
+        error: comments_result.error
+      });
+      return;
+    }
+    const comments = normalizeYougileComments(comments_result.data);
+    res.status(200).json({ ok: true, comments });
+  });
+
+  /**
+   * Add a comment to a Yougile task.
+   *
+   * @param {Request} req
+   * @param {Response} res
+   */
+  app.post('/api/integrations/yougile/task-comments', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const task_id = String(body.task_id || '').trim();
+    const text = String(body.text || '').trim();
+    if (!task_id) {
+      res.status(400).json({ ok: false, error: 'Missing task_id' });
+      return;
+    }
+    if (!text) {
+      res.status(400).json({ ok: false, error: 'Missing text' });
+      return;
+    }
+    const yougile = readIntegrations(root_dir).yougile;
+    if (!yougile || !yougile.api_key) {
+      res.status(400).json({ ok: false, error: 'Yougile not connected' });
+      return;
+    }
+    const client = createYougileClient({
+      base_url: yougile.base_url,
+      api_key: yougile.api_key
+    });
+    const create_result = await createYougileTaskComment(client, task_id, text);
+    if (!create_result.ok) {
+      res.status(create_result.status || 502).json({
+        ok: false,
+        error: create_result.error
+      });
+      return;
+    }
+    const created_comment = normalizeYougileComment(
+      extractYougileTaskPayload(create_result.data)
+    );
+    res.status(200).json({
+      ok: true,
+      comment: created_comment
+    });
+  });
+
+  /**
+   * Update title/description of a Yougile task.
+   *
+   * @param {Request} req
+   * @param {Response} res
+   */
+  app.patch('/api/integrations/yougile/task', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const task_id = String(body.task_id || '').trim();
+    const title = typeof body.title === 'string' ? body.title : undefined;
+    const description =
+      typeof body.description === 'string' ? body.description : undefined;
+    if (!task_id) {
+      res.status(400).json({ ok: false, error: 'Missing task_id' });
+      return;
+    }
+    if (
+      (title === undefined || title.trim().length === 0) &&
+      (description === undefined || description.trim().length === 0)
+    ) {
+      res
+        .status(400)
+        .json({ ok: false, error: 'Missing title or description' });
+      return;
+    }
+    const yougile = readIntegrations(root_dir).yougile;
+    if (!yougile || !yougile.api_key) {
+      res.status(400).json({ ok: false, error: 'Yougile not connected' });
+      return;
+    }
+    const client = createYougileClient({
+      base_url: yougile.base_url,
+      api_key: yougile.api_key
+    });
+    const update_result = await updateYougileTask(client, task_id, {
+      title,
+      description
+    });
+    if (!update_result.ok) {
+      res.status(update_result.status || 502).json({
+        ok: false,
+        error: update_result.error
+      });
+      return;
+    }
+    const task_info = normalizeYougileTaskInfo(
+      extractYougileTaskPayload(update_result.data),
+      yougile.base_url,
+      yougile.company_id || ''
+    );
+    res.status(200).json({
+      ok: true,
+      task: task_info
+        ? {
+            id: task_info.id,
+            title: task_info.title,
+            description: task_info.description,
+            body: task_info.body,
+            link: task_info.link
+          }
+        : null
+    });
   });
 
   /**
@@ -1562,7 +1763,7 @@ async function fetchYougileSeverityValueMap(client) {
   if (!severity_id) {
     return new Map();
   }
-  /** @type {Array<{ id: string, title: string }>} */
+  /** @type {any[]} */
   let states = Array.isArray(severity_any.states) ? severity_any.states : [];
   if (states.length === 0) {
     const states_result = await fetchYougileList(client, [
@@ -1572,7 +1773,7 @@ async function fetchYougileSeverityValueMap(client) {
     if (!states_result.ok) {
       return new Map();
     }
-    states = normalizeYougileList(states_result.data);
+    states = /** @type {any[]} */ (normalizeYougileList(states_result.data));
   }
   /** @type {Map<string, string>} */
   const severity_map = new Map();
@@ -1612,7 +1813,7 @@ async function fetchYougileStickerValueMap(client) {
       any.title || any.Title || any.name || ''
     );
     const sticker_id = normalizeYougileId(any.id || any.Id || '');
-    /** @type {Array<{ id: string, title: string }>} */
+    /** @type {any[]} */
     let states = Array.isArray(any.states) ? any.states : [];
     if (states.length === 0 && sticker_id) {
       const states_result = await fetchYougileList(client, [
@@ -1622,7 +1823,7 @@ async function fetchYougileStickerValueMap(client) {
       if (!states_result.ok) {
         continue;
       }
-      states = normalizeYougileList(states_result.data);
+      states = /** @type {any[]} */ (normalizeYougileList(states_result.data));
     }
     for (const state of states) {
       const state_any = /** @type {any} */ (state);
@@ -1675,7 +1876,7 @@ function resolveSeverityPriority(
 }
 
 /**
- * @param {string} title
+ * @param {string} title_text
  * @returns {number}
  */
 function mapSeverityTitleToPriority(title_text) {
@@ -1854,6 +2055,271 @@ async function moveYougileTaskToColumn(client, task_id, column_id) {
     }
   }
   return last;
+}
+
+/**
+ * Fetch task comments by task id using candidate paths.
+ *
+ * @param {ReturnType<typeof createYougileClient>} client
+ * @param {string} task_id
+ * @param {number} limit
+ * @returns {ReturnType<typeof fetchYougileList>}
+ */
+async function fetchYougileTaskComments(client, task_id, limit = 50) {
+  const safe_limit = Number.isFinite(limit)
+    ? Math.max(1, Math.min(200, Math.floor(limit)))
+    : 50;
+  /** @type {Array<{ path: string, query?: Record<string, string | number | boolean> }>} */
+  const attempts = [
+    {
+      path: `/tasks/${task_id}/comments`,
+      query: { limit: safe_limit }
+    },
+    {
+      path: `/task/${task_id}/comments`,
+      query: { limit: safe_limit }
+    },
+    {
+      path: '/comments',
+      query: { taskId: task_id, limit: safe_limit }
+    },
+    {
+      path: '/comments',
+      query: { task_id, limit: safe_limit }
+    },
+    {
+      path: '/task-comments',
+      query: { taskId: task_id, limit: safe_limit }
+    },
+    {
+      path: '/task-comments',
+      query: { task_id, limit: safe_limit }
+    }
+  ];
+  /** @type {Awaited<ReturnType<typeof fetchYougileList>>} */
+  let last = {
+    ok: false,
+    status: 404,
+    error: { code: 'yougile_not_found', message: 'Comments not found' }
+  };
+  for (const attempt of attempts) {
+    const res = await client.request({
+      path: attempt.path,
+      query: attempt.query
+    });
+    if (res.ok) {
+      return res;
+    }
+    last = res;
+    if (res.status !== 404) {
+      return res;
+    }
+  }
+  return last;
+}
+
+/**
+ * Create a comment in a Yougile task.
+ *
+ * @param {ReturnType<typeof createYougileClient>} client
+ * @param {string} task_id
+ * @param {string} text
+ * @returns {ReturnType<typeof fetchYougileList>}
+ */
+async function createYougileTaskComment(client, task_id, text) {
+  const comment_text = String(text || '').trim();
+  /** @type {Array<{ path: string, include_task_id: boolean }>} */
+  const attempts = [
+    { path: `/tasks/${task_id}/comments`, include_task_id: false },
+    { path: `/task/${task_id}/comments`, include_task_id: false },
+    { path: '/comments', include_task_id: true },
+    { path: '/task-comments', include_task_id: true }
+  ];
+  /** @type {Array<Record<string, string>>} */
+  const body_variants = [
+    { text: comment_text },
+    { message: comment_text },
+    { comment: comment_text }
+  ];
+  /** @type {Awaited<ReturnType<typeof fetchYougileList>>} */
+  let last = {
+    ok: false,
+    status: 404,
+    error: { code: 'yougile_not_found', message: 'Comment endpoint not found' }
+  };
+  for (const attempt of attempts) {
+    for (const body_variant of body_variants) {
+      /** @type {Record<string, string>} */
+      const body = { ...body_variant };
+      if (attempt.include_task_id) {
+        body.taskId = task_id;
+      }
+      const res = await client.request({
+        path: attempt.path,
+        method: 'POST',
+        body
+      });
+      if (res.ok) {
+        return res;
+      }
+      last = res;
+      if (res.status !== 404) {
+        return res;
+      }
+    }
+  }
+  return last;
+}
+
+/**
+ * Update fields of a Yougile task.
+ *
+ * @param {ReturnType<typeof createYougileClient>} client
+ * @param {string} task_id
+ * @param {{ title?: string, description?: string }} patch
+ * @returns {ReturnType<typeof fetchYougileList>}
+ */
+async function updateYougileTask(client, task_id, patch) {
+  const bodies = buildYougileTaskUpdateBodies(patch);
+  /** @type {Array<{ path: string, method: 'PATCH'|'PUT' }>} */
+  const attempts = [
+    { path: `/tasks/${task_id}`, method: 'PATCH' },
+    { path: `/task/${task_id}`, method: 'PATCH' },
+    { path: `/tasks/${task_id}`, method: 'PUT' },
+    { path: `/task/${task_id}`, method: 'PUT' }
+  ];
+  /** @type {Awaited<ReturnType<typeof fetchYougileList>>} */
+  let last = {
+    ok: false,
+    status: 404,
+    error: { code: 'yougile_not_found', message: 'Task endpoint not found' }
+  };
+  for (const attempt of attempts) {
+    for (const body of bodies) {
+      const res = await client.request({
+        path: attempt.path,
+        method: attempt.method,
+        body
+      });
+      if (res.ok) {
+        return res;
+      }
+      last = res;
+      if (res.status !== 404) {
+        return res;
+      }
+    }
+  }
+  return last;
+}
+
+/**
+ * @param {{ title?: string, description?: string }} patch
+ * @returns {Array<Record<string, string>>}
+ */
+export function buildYougileTaskUpdateBodies(patch) {
+  const title = typeof patch.title === 'string' ? patch.title.trim() : '';
+  const description =
+    typeof patch.description === 'string' ? patch.description.trim() : '';
+  /** @type {Array<Record<string, string>>} */
+  const bodies = [];
+
+  /** @type {Record<string, string>} */
+  const camel_case_body = {};
+  if (title) {
+    camel_case_body.title = title;
+  }
+  if (description) {
+    camel_case_body.description = description;
+  }
+  if (Object.keys(camel_case_body).length > 0) {
+    bodies.push(camel_case_body);
+  }
+
+  /** @type {Record<string, string>} */
+  const text_body = {};
+  if (title) {
+    text_body.title = title;
+  }
+  if (description) {
+    text_body.text = description;
+  }
+  if (Object.keys(text_body).length > 0) {
+    bodies.push(text_body);
+  }
+
+  /** @type {Record<string, string>} */
+  const snake_case_body = {};
+  if (title) {
+    snake_case_body.name = title;
+  }
+  if (description) {
+    snake_case_body.body = description;
+  }
+  if (Object.keys(snake_case_body).length > 0) {
+    bodies.push(snake_case_body);
+  }
+
+  return bodies;
+}
+
+/**
+ * @param {unknown} data
+ * @returns {Array<{ id: string, text: string, author: string, created_at: string }>}
+ */
+export function normalizeYougileComments(data) {
+  const items = normalizeYougileList(data);
+  const normalized = items
+    .map((item) => normalizeYougileComment(item))
+    .filter((comment) => comment !== null);
+  return /** @type {Array<{ id: string, text: string, author: string, created_at: string }>} */ (
+    normalized
+  );
+}
+
+/**
+ * @param {unknown} value
+ * @returns {{ id: string, text: string, author: string, created_at: string } | null}
+ */
+export function normalizeYougileComment(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const any = /** @type {any} */ (value);
+  const id = normalizeYougileId(any.id || any.Id || '');
+  const text = normalizeYougileTitle(
+    any.text ||
+      any.Text ||
+      any.comment ||
+      any.Comment ||
+      any.message ||
+      any.Message ||
+      ''
+  );
+  if (!id && !text) {
+    return null;
+  }
+  const author_value = any.author || any.Author || any.user || any.User || null;
+  let author = '';
+  if (typeof author_value === 'string') {
+    author = author_value.trim();
+  } else if (author_value && typeof author_value === 'object') {
+    author = buildYougileUserName(author_value);
+  }
+  const created_at = String(
+    any.createdAt ||
+      any.created_at ||
+      any.CreatedAt ||
+      any.date ||
+      any.Date ||
+      ''
+  ).trim();
+  return {
+    id: id || `c-${Math.abs(text.length).toString(36)}`,
+    text,
+    author,
+    created_at
+  };
 }
 
 /**

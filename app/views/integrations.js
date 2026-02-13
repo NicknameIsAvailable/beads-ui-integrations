@@ -2,7 +2,9 @@ import { html, render } from 'lit-html';
 import { listIntegrations } from '../data/integration-registry.js';
 import {
   connectYougile,
-  fetchIntegrationsStatus
+  disconnectYougile,
+  fetchIntegrationsStatus,
+  pingYougile
 } from '../data/integrations.js';
 import { debug } from '../utils/logging.js';
 import { showToast } from '../utils/toast.js';
@@ -13,7 +15,7 @@ import { showToast } from '../utils/toast.js';
 export function createIntegrationsView(mount_element) {
   const log = debug('views:integrations');
   const definitions = listIntegrations();
-  /** @type {{ loading: boolean, dialog_open: boolean, auth_mode: 'credentials'|'api_key', base_url: string, selected_id: string | null, detail_id: string | null, status_by_id: Record<string, { connected: boolean, base_url: string }> }} */
+  /** @type {{ loading: boolean, dialog_open: boolean, auth_mode: 'credentials'|'api_key', base_url: string, selected_id: string | null, detail_id: string | null, status_by_id: Record<string, { connected: boolean, base_url: string }>, action_pending: boolean, ping_message: string }} */
   let view_state = {
     loading: true,
     dialog_open: false,
@@ -21,7 +23,9 @@ export function createIntegrationsView(mount_element) {
     base_url: 'https://yougile.com',
     selected_id: null,
     detail_id: null,
-    status_by_id: {}
+    status_by_id: {},
+    action_pending: false,
+    ping_message: ''
   };
 
   const dialog = /** @type {HTMLDialogElement} */ (
@@ -313,6 +317,77 @@ export function createIntegrationsView(mount_element) {
   }
 
   /**
+   * @param {string} integration_id
+   * @returns {Promise<void>}
+   */
+  async function checkConnection(integration_id) {
+    if (integration_id !== 'yougile') {
+      return;
+    }
+    setState({ action_pending: true, ping_message: '' });
+    try {
+      const result = await pingYougile();
+      if (!result.ok) {
+        const message =
+          extractErrorMessage(result.data) || 'Проверка подключения не удалась';
+        setState({ action_pending: false, ping_message: message });
+        showToast(message, 'error', 3200);
+        return;
+      }
+      const probe_count = Number(
+        /** @type {any} */ (result.data).probe_count || 0
+      );
+      const message = `Подключение активно, тестовый запрос успешен (${probe_count}).`;
+      setState({ action_pending: false, ping_message: message });
+      showToast('Yougile API доступен', 'success', 2400);
+    } catch (err) {
+      log('check connection failed: %o', err);
+      setState({
+        action_pending: false,
+        ping_message: 'Ошибка проверки подключения'
+      });
+      showToast('Ошибка проверки подключения', 'error', 3200);
+    }
+  }
+
+  /**
+   * @param {string} integration_id
+   * @returns {Promise<void>}
+   */
+  async function disconnectIntegration(integration_id) {
+    if (integration_id !== 'yougile') {
+      return;
+    }
+    const confirmed = window.confirm(
+      'Отключить Yougile для текущего workspace?'
+    );
+    if (!confirmed) {
+      return;
+    }
+    setState({ action_pending: true, ping_message: '' });
+    try {
+      const result = await disconnectYougile();
+      if (!result.ok) {
+        const message =
+          extractErrorMessage(result.data) || 'Не удалось отключить интеграцию';
+        setState({ action_pending: false, ping_message: message });
+        showToast(message, 'error', 3200);
+        return;
+      }
+      setState({ action_pending: false, ping_message: 'Интеграция отключена' });
+      showToast('Yougile отключён', 'success', 2200);
+      await loadStatus();
+    } catch (err) {
+      log('disconnect failed: %o', err);
+      setState({
+        action_pending: false,
+        ping_message: 'Ошибка отключения интеграции'
+      });
+      showToast('Ошибка отключения интеграции', 'error', 3200);
+    }
+  }
+
+  /**
    * @param {{ id: string, name: string, description: string, docs_url: string, api_key_steps: string[], api_key_request: { method: string, url: string, body: string }, base_url_default: string, auth_modes: Array<'credentials'|'api_key'> }} definition
    * @returns {import('lit-html').TemplateResult<1>}
    */
@@ -336,15 +411,42 @@ export function createIntegrationsView(mount_element) {
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          class="btn primary"
-          @click=${() => openDialogFor(definition)}
-        >
-          ${connected ? 'Переподключить' : 'Подключить'}
-        </button>
+        <div class="integrations-detail__actions">
+          <button
+            type="button"
+            class="btn"
+            ?disabled=${view_state.action_pending}
+            @click=${() => checkConnection(definition.id)}
+          >
+            Проверить API
+          </button>
+          ${connected
+            ? html`<button
+                type="button"
+                class="btn"
+                ?disabled=${view_state.action_pending}
+                @click=${() => disconnectIntegration(definition.id)}
+              >
+                Отключить
+              </button>`
+            : null}
+          <button
+            type="button"
+            class="btn primary"
+            ?disabled=${view_state.action_pending}
+            @click=${() => openDialogFor(definition)}
+          >
+            ${connected ? 'Переподключить' : 'Подключить'}
+          </button>
+        </div>
       </header>
       <div class="integrations-detail">
+        ${view_state.ping_message
+          ? html`<section class="integrations-detail__panel">
+              <h3>Состояние подключения</h3>
+              <p>${view_state.ping_message}</p>
+            </section>`
+          : null}
         <section class="integrations-detail__panel">
           <h3>Описание</h3>
           <p>${definition.description}</p>

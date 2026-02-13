@@ -15,9 +15,9 @@ import { showToast } from '../utils/toast.js';
  */
 
 /**
- * Create Task Search dialog.
+ * Create a modal for finding a remote task by ID and moving it across columns.
  *
- * @returns {{ open: () => void, destroy: () => void }}
+ * @returns {{ open: () => void, openWithTaskId: (task_id: string, task_link?: string) => void, destroy: () => void }}
  */
 export function createTaskSearchDialog() {
   const log = debug('views:task-search-dialog');
@@ -78,6 +78,7 @@ export function createTaskSearchDialog() {
 
   /**
    * @param {string} task_id
+   * @param {string} [task_link]
    * @returns {void}
    */
   function openWithTaskId(task_id, task_link = '') {
@@ -152,17 +153,19 @@ export function createTaskSearchDialog() {
       }
       const data = /** @type {any} */ (result.data);
       const integrations_raw = Array.isArray(data.integrations)
-        ? data.integrations
+        ? /** @type {any[]} */ (data.integrations)
         : [];
-      const statuses_raw = Array.isArray(data.statuses) ? data.statuses : [];
+      const statuses_raw = Array.isArray(data.statuses)
+        ? /** @type {any[]} */ (data.statuses)
+        : [];
       const status_map = new Map(
-        statuses_raw.map((status) => [
+        statuses_raw.map((/** @type {any} */ status) => [
           String(status.id || ''),
           Boolean(status.connected)
         ])
       );
       const integrations = integrations_raw
-        .map((item) => {
+        .map((/** @type {any} */ item) => {
           const any = /** @type {any} */ (item);
           const id = String(any.id || '');
           return {
@@ -171,8 +174,10 @@ export function createTaskSearchDialog() {
             connected: status_map.get(id) === true
           };
         })
-        .filter((it) => it.id.length > 0);
-      const connected = integrations.filter((it) => it.connected);
+        .filter((/** @type {IntegrationOption} */ it) => it.id.length > 0);
+      const connected = integrations.filter(
+        (/** @type {IntegrationOption} */ it) => it.connected
+      );
       const selected_integration =
         connected.length === 1 ? connected[0].id : '';
       setState({
@@ -210,6 +215,8 @@ export function createTaskSearchDialog() {
   }
 
   /**
+   * @param {string} integration_id
+   * @param {string} task_id
    * @returns {Promise<void>}
    */
   async function loadTaskContext(integration_id, task_id) {
@@ -254,6 +261,7 @@ export function createTaskSearchDialog() {
         column_id: String(task.column_id || ''),
         board_id: String(task.board_id || '')
       };
+      /** @type {ColumnOption[]} */
       let columns = [];
       if (task_result.board_id) {
         columns = await loadColumns(integration_id, task_result.board_id);
@@ -280,7 +288,7 @@ export function createTaskSearchDialog() {
   /**
    * @param {string} integration_id
    * @param {string} board_id
-   * @returns {Promise<void>}
+   * @returns {Promise<ColumnOption[]>}
    */
   async function loadColumns(integration_id, board_id) {
     try {
@@ -296,17 +304,19 @@ export function createTaskSearchDialog() {
             3400
           );
         }
-        return;
+        return [];
       }
       const data = /** @type {any} */ (result.data);
-      const columns_raw = Array.isArray(data.columns) ? data.columns : [];
+      const columns_raw = Array.isArray(data.columns)
+        ? /** @type {any[]} */ (data.columns)
+        : [];
       const columns = columns_raw
-        .map((item) => ({
+        .map((/** @type {any} */ item) => ({
           id: String(item.id || ''),
           title: String(item.title || ''),
           board_id: String(item.board_id || '')
         }))
-        .filter((column) => column.id.length > 0);
+        .filter((/** @type {ColumnOption} */ column) => column.id.length > 0);
       setState({ columns });
       return columns;
     } catch (err) {
@@ -414,7 +424,7 @@ export function createTaskSearchDialog() {
   }
 
   /**
-   * @returns {import('lit-html').TemplateResult<1>}
+   * @returns {void}
    */
   function renderDialog() {
     const connected_integrations = view_state.integrations.filter(

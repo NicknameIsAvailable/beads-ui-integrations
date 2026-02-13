@@ -73,6 +73,15 @@ export function saveYougileConnection(root_dir, payload) {
 
 /**
  * @param {string} root_dir
+ */
+export function clearYougileConnection(root_dir) {
+  const state = readIntegrations(root_dir);
+  const updated = { ...state, yougile: null };
+  writeIntegrations(root_dir, updated);
+}
+
+/**
+ * @param {string} root_dir
  * @returns {Array<{ id: string, connected: boolean, base_url: string }>}
  */
 export function getIntegrationStatusList(root_dir) {

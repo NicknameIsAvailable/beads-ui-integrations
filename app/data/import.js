@@ -115,6 +115,49 @@ export async function fetchIntegrationTaskSearch(integration_id, payload) {
 
 /**
  * @param {string} integration_id
+ * @param {{ task_id: string, limit?: number }} payload
+ * @returns {Promise<ApiResult>}
+ */
+export async function fetchIntegrationTaskComments(integration_id, payload) {
+  const url = new URL(
+    `/api/integrations/${integration_id}/task-comments`,
+    window.location.origin
+  );
+  url.searchParams.set('task_id', payload.task_id);
+  if (typeof payload.limit === 'number' && Number.isFinite(payload.limit)) {
+    url.searchParams.set('limit', String(payload.limit));
+  }
+  return requestJson(url.toString());
+}
+
+/**
+ * @param {string} integration_id
+ * @param {{ task_id: string, text: string }} payload
+ * @returns {Promise<ApiResult>}
+ */
+export async function addIntegrationTaskComment(integration_id, payload) {
+  return requestJson(`/api/integrations/${integration_id}/task-comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+/**
+ * @param {string} integration_id
+ * @param {{ task_id: string, title?: string, description?: string }} payload
+ * @returns {Promise<ApiResult>}
+ */
+export async function updateIntegrationTask(integration_id, payload) {
+  return requestJson(`/api/integrations/${integration_id}/task`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+/**
+ * @param {string} integration_id
  * @param {{ task_id: string, column_id: string }} payload
  * @returns {Promise<ApiResult>}
  */
