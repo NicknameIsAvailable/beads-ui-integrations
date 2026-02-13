@@ -7,7 +7,8 @@ import {
   fetchIntegrationTeams,
   fetchIntegrationUsers,
   fetchIntegrationsStatus,
-  runImport
+  runImport,
+  runTaskLinkImport
 } from '../data/import.js';
 import { debug } from '../utils/logging.js';
 import { showToast } from '../utils/toast.js';
@@ -44,7 +45,7 @@ export function createImportDialog() {
   dialog.setAttribute('aria-modal', 'true');
   document.body.appendChild(dialog);
 
-  /** @type {{ loading: boolean, step_index: number, integrations: IntegrationOption[], teams: TeamOption[], projects: ProjectOption[], columns: ColumnOption[], users: UserOption[], stickers: StickerOption[], preview_tasks: PreviewTask[], preview_task: PreviewTask | null, preview_loading: boolean, selected_integration: string, selected_team: string, selected_project: string, selected_columns: Set<string>, selected_users: Set<string>, selected_sticker_values: Set<string>, selected_task_ids: Set<string> }} */
+  /** @type {{ loading: boolean, step_index: number, integrations: IntegrationOption[], teams: TeamOption[], projects: ProjectOption[], columns: ColumnOption[], users: UserOption[], stickers: StickerOption[], preview_tasks: PreviewTask[], preview_task: PreviewTask | null, preview_loading: boolean, selected_integration: string, selected_team: string, selected_project: string, selected_columns: Set<string>, selected_users: Set<string>, selected_sticker_values: Set<string>, selected_task_ids: Set<string>, quick_task_input: string, quick_import_loading: boolean }} */
   let view_state = {
     loading: false,
     step_index: 0,
@@ -63,7 +64,9 @@ export function createImportDialog() {
     selected_columns: new Set(),
     selected_users: new Set(),
     selected_sticker_values: new Set(),
-    selected_task_ids: new Set()
+    selected_task_ids: new Set(),
+    quick_task_input: '',
+    quick_import_loading: false
   };
 
   /** @type {string} */
@@ -137,7 +140,9 @@ export function createImportDialog() {
       selected_columns: new Set(),
       selected_users: new Set(),
       selected_sticker_values: new Set(),
-      selected_task_ids: new Set()
+      selected_task_ids: new Set(),
+      quick_task_input: '',
+      quick_import_loading: false
     });
     last_preview_key = '';
     try {
@@ -616,7 +621,9 @@ export function createImportDialog() {
       selected_sticker_values: new Set(),
       preview_tasks: [],
       preview_task: null,
-      selected_task_ids: new Set()
+      selected_task_ids: new Set(),
+      quick_task_input: '',
+      quick_import_loading: false
     });
     last_preview_key = '';
     if (integration_id) {
@@ -673,6 +680,73 @@ export function createImportDialog() {
     if (project_id && view_state.selected_integration) {
       void loadColumns(view_state.selected_integration, project_id);
       void loadFilters(view_state.selected_integration, project_id);
+    }
+  }
+
+  /**
+   * @param {Event} ev
+   * @returns {void}
+   */
+  function onQuickTaskInputChange(ev) {
+    const input = /** @type {HTMLInputElement} */ (ev.target);
+    setState({ quick_task_input: String(input.value || '') });
+  }
+
+  /**
+   * @param {KeyboardEvent} ev
+   * @returns {void}
+   */
+  function onQuickTaskInputKeydown(ev) {
+    if (ev.key !== 'Enter') {
+      return;
+    }
+    ev.preventDefault();
+    void runQuickTaskImport();
+  }
+
+  /**
+   * @returns {Promise<void>}
+   */
+  async function runQuickTaskImport() {
+    if (view_state.selected_integration !== 'yougile') {
+      showToast(
+        'Быстрый импорт по ссылке доступен только для Yougile',
+        'error'
+      );
+      return;
+    }
+    const task_input = view_state.quick_task_input.trim();
+    if (!task_input) {
+      showToast('Вставьте ссылку на задачу Yougile', 'error', 2600);
+      return;
+    }
+    setState({ quick_import_loading: true });
+    try {
+      const result = await runTaskLinkImport(view_state.selected_integration, {
+        task_input
+      });
+      if (!result.ok || !result.data || typeof result.data !== 'object') {
+        const message =
+          extractErrorMessage(result.data) || 'Не удалось импортировать задачу';
+        showToast(message, 'error', 3400);
+        return;
+      }
+      const data = /** @type {{ created?: boolean, skipped?: boolean }} */ (
+        result.data
+      );
+      if (data.skipped) {
+        showToast('Задача уже импортирована', 'info', 3000);
+      } else if (data.created) {
+        showToast('Задача импортирована', 'success', 2600);
+      } else {
+        showToast('Импорт завершён', 'success', 2600);
+      }
+      close();
+    } catch (err) {
+      log('quick import failed: %o', err);
+      showToast('Ошибка импорта', 'error', 3400);
+    } finally {
+      setState({ quick_import_loading: false });
     }
   }
 
@@ -956,6 +1030,11 @@ export function createImportDialog() {
    */
   function renderStepSource(connected) {
     const has_teams = view_state.teams.length > 0;
+    const supports_quick_link =
+      view_state.selected_integration === 'yougile' ||
+      (view_state.selected_integration === '' &&
+        connected.length === 1 &&
+        connected[0].id === 'yougile');
     return html`
       <div class="import-dialog__field">
         <label>
@@ -1008,6 +1087,42 @@ export function createImportDialog() {
           </select>
         </label>
       </div>
+      ${supports_quick_link
+        ? html`
+            <div class="import-dialog__quick">
+              <div class="import-dialog__quick-header">
+                <span>Быстрый импорт по ссылке</span>
+                <span class="import-dialog__hint-inline">
+                  Вставьте ссылку вида
+                  <span class="mono"
+                    >https://ru.yougile.com/team/.../#DOC-519</span
+                  >
+                </span>
+              </div>
+              <div class="import-dialog__quick-controls">
+                <input
+                  type="text"
+                  class="import-dialog__quick-input"
+                  .value=${view_state.quick_task_input}
+                  placeholder="https://ru.yougile.com/team/.../#DOC-519"
+                  @input=${onQuickTaskInputChange}
+                  @keydown=${onQuickTaskInputKeydown}
+                  ?disabled=${view_state.quick_import_loading}
+                />
+                <button
+                  type="button"
+                  class="btn primary"
+                  ?disabled=${view_state.quick_import_loading}
+                  @click=${runQuickTaskImport}
+                >
+                  ${view_state.quick_import_loading
+                    ? 'Импорт...'
+                    : 'Импортировать по ссылке'}
+                </button>
+              </div>
+            </div>
+          `
+        : null}
     `;
   }
 

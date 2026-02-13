@@ -1292,6 +1292,137 @@ export function createApp(config) {
     res.status(200).json({ ok: true, created_count, skipped_count });
   });
 
+  /**
+   * Import a single Yougile task by URL or task id.
+   *
+   * @param {Request} req
+   * @param {Response} res
+   */
+  app.post('/api/integrations/yougile/import-task-link', async (req, res) => {
+    const root_dir = resolveWorkspaceRoot(req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const task_input = String(
+      body.task_input || body.task_url || body.task_id || ''
+    ).trim();
+    if (!task_input) {
+      res.status(400).json({ ok: false, error: 'Missing task_input' });
+      return;
+    }
+    const task_id = extractYougileTaskIdFromInput(task_input);
+    if (!task_id) {
+      res.status(400).json({
+        ok: false,
+        error: 'Invalid Yougile task link. Expected .../#DOC-519'
+      });
+      return;
+    }
+
+    const yougile = readIntegrations(root_dir).yougile;
+    if (!yougile || !yougile.api_key) {
+      res.status(400).json({ ok: false, error: 'Yougile not connected' });
+      return;
+    }
+
+    const client = createYougileClient({
+      base_url: yougile.base_url,
+      api_key: yougile.api_key
+    });
+    const task_result = await fetchYougileTaskById(client, task_id);
+    if (!task_result.ok) {
+      res.status(task_result.status || 502).json({
+        ok: false,
+        error: task_result.error
+      });
+      return;
+    }
+    const task_payload = extractYougileTaskPayload(task_result.data);
+    const task_info = normalizeYougileTaskInfo(
+      task_payload,
+      yougile.base_url,
+      yougile.company_id || ''
+    );
+    if (!task_info) {
+      res.status(404).json({ ok: false, error: 'Task not found' });
+      return;
+    }
+
+    const external_ref = task_info.id ? `yougile:${task_info.id}` : '';
+    const existing_external_refs = await fetchExistingExternalRefs(root_dir);
+    if (external_ref && existing_external_refs.has(external_ref)) {
+      res.status(200).json({
+        ok: true,
+        created: false,
+        skipped: true,
+        reason: 'already_imported',
+        task: { id: task_info.id, title: task_info.title, link: task_info.link }
+      });
+      return;
+    }
+
+    const severity_by_value_id = await fetchYougileSeverityValueMap(client);
+    const sticker_value_map = await fetchYougileStickerValueMap(client);
+    const default_priority = 2;
+    const issue_title = task_info.title || task_info.id || 'Задача Yougile';
+    const issue_body = buildYougileIssueBody(task_info);
+    const issue_labels = buildStickerLabels(task_info, sticker_value_map);
+    const issue_priority = resolveSeverityPriority(
+      task_info,
+      severity_by_value_id,
+      default_priority
+    );
+    /** @type {string[]} */
+    const args = [
+      'create',
+      issue_title,
+      '-t',
+      'task',
+      '-p',
+      String(issue_priority)
+    ];
+    if (external_ref) {
+      args.push('--external-ref', external_ref);
+    }
+    if (issue_body) {
+      args.push('-d', issue_body);
+    }
+    if (issue_labels.length > 0) {
+      args.push('-l', issue_labels.join(','));
+    }
+
+    const create_result = await runBd(args, { cwd: root_dir });
+    if (create_result.code !== 0) {
+      const failure_message = `${create_result.stderr || ''}\n${create_result.stdout || ''}`;
+      if (isExternalRefDuplicateError(failure_message)) {
+        res.status(200).json({
+          ok: true,
+          created: false,
+          skipped: true,
+          reason: 'already_imported',
+          task: {
+            id: task_info.id,
+            title: task_info.title,
+            link: task_info.link
+          }
+        });
+        return;
+      }
+      res.status(502).json({
+        ok: false,
+        error: create_result.stderr || create_result.stdout || 'bd failed'
+      });
+      return;
+    }
+
+    const issue_id = extractCreatedIssueId(create_result.stdout || '');
+    res.status(200).json({
+      ok: true,
+      created: true,
+      skipped: false,
+      issue_id,
+      task: { id: task_info.id, title: task_info.title, link: task_info.link }
+    });
+  });
+
   // Register workspace endpoint - allows CLI to register workspaces dynamically
   // when the server is already running
   /**
@@ -2343,6 +2474,74 @@ function extractYougileTaskPayload(data) {
     }
   }
   return data;
+}
+
+/**
+ * Extract Yougile task id from raw input.
+ * Supports plain ids and links like ".../#DOC-519".
+ *
+ * @param {string} task_input
+ * @returns {string}
+ */
+export function extractYougileTaskIdFromInput(task_input) {
+  const raw_input = String(task_input || '').trim();
+  if (!raw_input) {
+    return '';
+  }
+  const explicit_code_match = raw_input.match(/^#?([a-z]+-\d+)$/i);
+  if (explicit_code_match) {
+    return explicit_code_match[1].toUpperCase();
+  }
+
+  const looks_like_link =
+    raw_input.includes('://') ||
+    raw_input.includes('/') ||
+    raw_input.includes('#');
+  if (!looks_like_link) {
+    return raw_input;
+  }
+
+  try {
+    const url = new URL(raw_input);
+    const hash_value = String(url.hash || '')
+      .replace(/^#/, '')
+      .trim();
+    const hash_match = hash_value.match(/([a-z]+-\d+)/i);
+    if (hash_match) {
+      return hash_match[1].toUpperCase();
+    }
+    const path_parts = url.pathname
+      .split('/')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    for (let index = path_parts.length - 1; index >= 0; index -= 1) {
+      const path_match = path_parts[index].match(/^([a-z]+-\d+)$/i);
+      if (path_match) {
+        return path_match[1].toUpperCase();
+      }
+    }
+  } catch {
+    // Ignore URL parsing errors and continue with regex fallback.
+  }
+
+  const fallback_match = raw_input.match(/#([a-z]+-\d+)/i);
+  if (fallback_match) {
+    return fallback_match[1].toUpperCase();
+  }
+  return '';
+}
+
+/**
+ * @param {string} output_text
+ * @returns {string}
+ */
+function extractCreatedIssueId(output_text) {
+  const text = String(output_text || '');
+  const match = text.match(/Created issue:\s*([A-Za-z0-9.-]+)/);
+  if (!match) {
+    return '';
+  }
+  return String(match[1] || '');
 }
 
 /**

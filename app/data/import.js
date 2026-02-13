@@ -262,3 +262,16 @@ export async function runImport(integration_id, payload) {
     body: JSON.stringify(payload)
   });
 }
+
+/**
+ * @param {string} integration_id
+ * @param {{ task_input: string }} payload
+ * @returns {Promise<ApiResult>}
+ */
+export async function runTaskLinkImport(integration_id, payload) {
+  return requestJson(`/api/integrations/${integration_id}/import-task-link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}

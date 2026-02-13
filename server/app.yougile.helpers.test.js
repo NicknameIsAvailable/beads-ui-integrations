@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildYougileTaskUpdateBodies,
+  extractYougileTaskIdFromInput,
   normalizeYougileComment,
   normalizeYougileComments
 } from './app.js';
@@ -48,5 +49,27 @@ describe('yougile helper functions', () => {
       { id: 'cm-1', text: 'First', author: '', created_at: '' },
       { id: 'cm-2', text: 'Second', author: '', created_at: '' }
     ]);
+  });
+
+  test('extracts task id from canonical yougile link hash', () => {
+    const task_id = extractYougileTaskIdFromInput(
+      'https://ru.yougile.com/team/d8e5a52411d3/#DOC-519'
+    );
+
+    expect(task_id).toBe('DOC-519');
+  });
+
+  test('returns plain task id when input is not a link', () => {
+    const task_id = extractYougileTaskIdFromInput('DOC-519');
+
+    expect(task_id).toBe('DOC-519');
+  });
+
+  test('returns empty id when link has no task marker', () => {
+    const task_id = extractYougileTaskIdFromInput(
+      'https://ru.yougile.com/team/d8e5a52411d3/'
+    );
+
+    expect(task_id).toBe('');
   });
 });
