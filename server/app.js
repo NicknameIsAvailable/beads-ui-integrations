@@ -1230,6 +1230,7 @@ export function createApp(config) {
     }
 
     const default_priority = 2;
+    const import_date_label = buildYougileImportDateLabel(new Date());
     /** @type {Array<{ id: string, title: string, error: string }>} */
     const errors = [];
     let created_count = 0;
@@ -1239,7 +1240,11 @@ export function createApp(config) {
     for (const task of tasks) {
       const title = task.title || task.id || 'Задача Yougile';
       const issue_body = buildYougileIssueBody(task);
-      const labels = buildStickerLabels(task, sticker_value_map);
+      const labels = buildYougileImportLabels(
+        task,
+        sticker_value_map,
+        import_date_label
+      );
       const priority = resolveSeverityPriority(
         task,
         severity_by_value_id,
@@ -1364,7 +1369,12 @@ export function createApp(config) {
     const default_priority = 2;
     const issue_title = task_info.title || task_info.id || 'Задача Yougile';
     const issue_body = buildYougileIssueBody(task_info);
-    const issue_labels = buildStickerLabels(task_info, sticker_value_map);
+    const import_date_label = buildYougileImportDateLabel(new Date());
+    const issue_labels = buildYougileImportLabels(
+      task_info,
+      sticker_value_map,
+      import_date_label
+    );
     const issue_priority = resolveSeverityPriority(
       task_info,
       severity_by_value_id,
@@ -2829,6 +2839,39 @@ function buildStickerLabels(task, value_map) {
     }
   }
   return Array.from(new Set(labels));
+}
+
+/**
+ * @param {Date} imported_at
+ * @returns {string}
+ */
+export function buildYougileImportDateLabel(imported_at) {
+  if (!(imported_at instanceof Date)) {
+    return '';
+  }
+  const time_value = imported_at.getTime();
+  if (!Number.isFinite(time_value)) {
+    return '';
+  }
+  const year = imported_at.getUTCFullYear();
+  const month = String(imported_at.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(imported_at.getUTCDate()).padStart(2, '0');
+  return `imported:${year}-${month}-${day}`;
+}
+
+/**
+ * @param {YougileTaskInfo} task
+ * @param {Map<string, { sticker_title: string, value_title: string }>} value_map
+ * @param {string} import_date_label
+ * @returns {string[]}
+ */
+export function buildYougileImportLabels(task, value_map, import_date_label) {
+  const sticker_labels = buildStickerLabels(task, value_map);
+  const normalized_date_label = sanitizeLabel(String(import_date_label || ''));
+  if (!normalized_date_label) {
+    return sticker_labels;
+  }
+  return Array.from(new Set([...sticker_labels, normalized_date_label]));
 }
 
 /**

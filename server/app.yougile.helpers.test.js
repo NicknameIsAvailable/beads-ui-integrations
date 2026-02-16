@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
+  buildYougileImportDateLabel,
+  buildYougileImportLabels,
   buildYougileTaskUpdateBodies,
   extractYougileTaskIdFromInput,
   normalizeYougileComment,
@@ -71,5 +73,39 @@ describe('yougile helper functions', () => {
     );
 
     expect(task_id).toBe('');
+  });
+
+  test('builds import date label in yyyy-mm-dd format', () => {
+    const label = buildYougileImportDateLabel(
+      new Date('2026-02-13T10:11:12.000Z')
+    );
+
+    expect(label).toBe('imported:2026-02-13');
+  });
+
+  test('adds import date label to sticker labels without duplicates', () => {
+    const labels = buildYougileImportLabels(
+      {
+        id: 'DOC-1',
+        title: 'Task',
+        description: '',
+        body: '',
+        link: '',
+        assigned_ids: [],
+        sticker_value_ids: ['severity_major']
+      },
+      new Map([
+        [
+          'severity_major',
+          {
+            sticker_title: 'severity',
+            value_title: 'major'
+          }
+        ]
+      ]),
+      'imported:2026-02-13'
+    );
+
+    expect(labels).toEqual(['severity: major', 'imported:2026-02-13']);
   });
 });
