@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createStore } from './state.js';
 import { createWorkspaceManager } from './workspace-manager.js';
 
@@ -44,6 +44,10 @@ function createMockClient(options = {}) {
 }
 
 describe('workspace manager', () => {
+  beforeEach(() => {
+    window.localStorage.removeItem('beads-ui.workspace');
+  });
+
   test('loads workspace list into store', async () => {
     const mock_client = createMockClient({
       on_send(type) {
@@ -86,6 +90,9 @@ describe('workspace manager', () => {
 
     expect(store.getState().workspace.current?.path).toBe('/projects/a');
     expect(store.getState().workspace.available).toHaveLength(2);
+    expect(window.localStorage.getItem('beads-ui.workspace')).toBe(
+      '/projects/a'
+    );
 
     workspace_manager.destroy();
   });
@@ -145,6 +152,7 @@ describe('workspace manager', () => {
 
   test('handles workspace-changed by resubscribing and refreshing list', async () => {
     vi.useFakeTimers();
+    window.localStorage.setItem('beads-ui.workspace', '/projects/a');
 
     let list_requests = 0;
     const mock_client = createMockClient({
@@ -183,6 +191,9 @@ describe('workspace manager', () => {
     });
 
     expect(store.getState().workspace.current?.path).toBe('/projects/b');
+    expect(window.localStorage.getItem('beads-ui.workspace')).toBe(
+      '/projects/b'
+    );
     expect(clear_and_resubscribe).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(0);

@@ -31,10 +31,18 @@ const config = getConfig();
 
 /** @type {(source: 'registry'|'register-workspace') => boolean} */
 let notifyWorkspacesUpdated = () => false;
+/** @type {(context: { source: 'yougile-import'|'yougile-import-task-link', root_dir: string, created_count: number }) => void} */
+let notifyIssuesUpdated = () => {};
+/** @type {() => string} */
+let resolveWorkspaceRootForHttp = () => config.root_dir;
 
 const app = createApp(config, {
+  resolveWorkspaceRoot: () => resolveWorkspaceRootForHttp(),
   onWorkspacesUpdated: () => {
     notifyWorkspacesUpdated('register-workspace');
+  },
+  onIssuesUpdated: (context) => {
+    notifyIssuesUpdated(context);
   }
 });
 const server = createServer(app);
@@ -55,14 +63,29 @@ const db_watcher = watchDb(config.root_dir, () => {
   // v2: all updates flow via subscription push envelopes only
 });
 
-const { broadcast, scheduleListRefresh } = attachWsServer(server, {
-  path: '/ws',
-  heartbeat_ms: 30000,
-  // Coalesce DB change bursts into one refresh run
-  refresh_debounce_ms: 75,
-  root_dir: config.root_dir,
-  watcher: db_watcher
-});
+const { broadcast, scheduleListRefresh, getCurrentWorkspace } = attachWsServer(
+  server,
+  {
+    path: '/ws',
+    heartbeat_ms: 30000,
+    // Coalesce DB change bursts into one refresh run
+    refresh_debounce_ms: 75,
+    root_dir: config.root_dir,
+    watcher: db_watcher
+  }
+);
+
+resolveWorkspaceRootForHttp = () =>
+  getCurrentWorkspace()?.root_dir || config.root_dir;
+notifyIssuesUpdated = (context) => {
+  log(
+    'issues updated source=%s root=%s created=%d',
+    context.source,
+    context.root_dir,
+    context.created_count
+  );
+  scheduleListRefresh();
+};
 
 notifyWorkspacesUpdated = createWorkspacesUpdatedBroadcaster({
   get_workspaces: getAvailableWorkspaces,

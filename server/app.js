@@ -29,7 +29,11 @@ import {
  * Create and configure the Express application.
  *
  * @param {{ host: string, port: number, app_dir: string, root_dir: string }} config - Server configuration.
- * @param {{ onWorkspacesUpdated?: (source: 'register-workspace') => void }} [options]
+ * @param {{
+ *   onWorkspacesUpdated?: (source: 'register-workspace') => void,
+ *   resolveWorkspaceRoot?: () => string,
+ *   onIssuesUpdated?: (context: { source: 'yougile-import'|'yougile-import-task-link', root_dir: string, created_count: number }) => void
+ * }} [options]
  * @returns {Express} Configured Express app instance.
  */
 export function createApp(config, options = {}) {
@@ -58,9 +62,16 @@ export function createApp(config, options = {}) {
    * @returns {string}
    */
   function resolveWorkspaceRoot(req) {
+    const active_root_candidate =
+      typeof options.resolveWorkspaceRoot === 'function'
+        ? String(options.resolveWorkspaceRoot() || '').trim()
+        : '';
+    const fallback_root = active_root_candidate
+      ? path.resolve(active_root_candidate)
+      : config.root_dir;
     const header_value = String(req.header('x-beads-workspace') || '').trim();
     if (!header_value) {
-      return config.root_dir;
+      return fallback_root;
     }
     const resolved_path = path.resolve(header_value);
     const available = getAvailableWorkspaces();
@@ -73,7 +84,13 @@ export function createApp(config, options = {}) {
         return workspace_root;
       }
     }
-    return config.root_dir;
+    if (
+      resolved_path === fallback_root ||
+      resolved_path.startsWith(fallback_root + path.sep)
+    ) {
+      return fallback_root;
+    }
+    return fallback_root;
   }
 
   /**
@@ -1294,6 +1311,13 @@ export function createApp(config, options = {}) {
     }
 
     if (errors.length > 0) {
+      if (created_count > 0) {
+        options.onIssuesUpdated?.({
+          source: 'yougile-import',
+          root_dir,
+          created_count
+        });
+      }
       res.status(207).json({
         ok: false,
         created_count,
@@ -1302,6 +1326,13 @@ export function createApp(config, options = {}) {
         errors
       });
       return;
+    }
+    if (created_count > 0) {
+      options.onIssuesUpdated?.({
+        source: 'yougile-import',
+        root_dir,
+        created_count
+      });
     }
     res.status(200).json({ ok: true, created_count, skipped_count });
   });
@@ -1450,6 +1481,11 @@ export function createApp(config, options = {}) {
     }
 
     const issue_id = extractCreatedIssueId(create_result.stdout || '');
+    options.onIssuesUpdated?.({
+      source: 'yougile-import-task-link',
+      root_dir,
+      created_count: 1
+    });
     res.status(200).json({
       ok: true,
       created: true,

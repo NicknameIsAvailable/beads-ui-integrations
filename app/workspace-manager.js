@@ -82,6 +82,10 @@ export function createWorkspaceManager(options) {
           }
         : null;
       options.store.setState({ workspace: { current, available } });
+      if (current && current.path) {
+        // Keep HTTP integration requests aligned with active workspace.
+        window.localStorage.setItem('beads-ui.workspace', current.path);
+      }
 
       // Restore persisted preference only when it differs and still exists.
       const saved_workspace = window.localStorage.getItem('beads-ui.workspace');
@@ -169,6 +173,7 @@ export function createWorkspaceManager(options) {
         }
       }
     });
+    window.localStorage.setItem('beads-ui.workspace', payload.root_dir);
     scheduleWorkspaceReload(0);
     void options.clearAndResubscribe();
   });

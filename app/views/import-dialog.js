@@ -829,7 +829,31 @@ export function createImportDialog() {
         task_ids: Array.from(view_state.selected_task_ids)
       });
       if (result.ok) {
-        showToast('Импорт запущен', 'success', 2400);
+        const data =
+          result.data && typeof result.data === 'object'
+            ? /** @type {{ created_count?: number, skipped_count?: number }} */ (
+                result.data
+              )
+            : {};
+        const created_count = Number(data.created_count || 0);
+        const skipped_count = Number(data.skipped_count || 0);
+        if (created_count > 0) {
+          const suffix =
+            skipped_count > 0 ? `, пропущено: ${skipped_count}` : '';
+          showToast(
+            `Импортировано: ${created_count}${suffix}`,
+            'success',
+            2800
+          );
+        } else if (skipped_count > 0) {
+          showToast(
+            `Новых задач нет, пропущено: ${skipped_count}`,
+            'info',
+            3200
+          );
+        } else {
+          showToast('Импорт завершён', 'success', 2400);
+        }
         close();
         return;
       }

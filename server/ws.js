@@ -421,7 +421,7 @@ function applyClosedIssuesFilter(spec, items) {
  *
  * @param {Server} http_server
  * @param {{ path?: string, heartbeat_ms?: number, refresh_debounce_ms?: number, root_dir?: string, watcher?: { rebind: (opts?: { root_dir?: string }) => void, path: string } }} [options]
- * @returns {{ wss: WebSocketServer, broadcast: (type: MessageType, payload?: unknown) => void, scheduleListRefresh: () => void, setWorkspace: (root_dir: string) => { changed: boolean, workspace: { root_dir: string, db_path: string } } }}
+ * @returns {{ wss: WebSocketServer, broadcast: (type: MessageType, payload?: unknown) => void, scheduleListRefresh: () => void, setWorkspace: (root_dir: string) => { changed: boolean, workspace: { root_dir: string, db_path: string } }, getCurrentWorkspace: () => { root_dir: string, db_path: string } | null }}
  */
 export function attachWsServer(http_server, options = {}) {
   const ws_path = options.path || '/ws';
@@ -557,7 +557,8 @@ export function attachWsServer(http_server, options = {}) {
     wss,
     broadcast,
     scheduleListRefresh,
-    setWorkspace
+    setWorkspace,
+    getCurrentWorkspace: () => CURRENT_WORKSPACE
     // v2: list subscription refresh handles updates
   };
 }
