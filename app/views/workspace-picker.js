@@ -19,6 +19,73 @@ function getProjectName(workspace_path) {
 }
 
 /**
+ * Create a short path label that remains readable in narrow headers.
+ *
+ * @param {string} workspace_path
+ * @returns {string}
+ */
+function compactPath(workspace_path) {
+  if (!workspace_path) {
+    return '';
+  }
+  const parts = workspace_path.split('/').filter(Boolean);
+  if (parts.length <= 3) {
+    return workspace_path;
+  }
+  return `.../${parts.slice(-3).join('/')}`;
+}
+
+/**
+ * Build deterministic and disambiguated option labels.
+ * Duplicate project names are expanded with parent/path hints.
+ *
+ * @param {WorkspaceInfo[]} available
+ * @returns {Array<{ workspace: WorkspaceInfo, label: string }>}
+ */
+function buildWorkspaceOptions(available) {
+  /** @type {Map<string, number>} */
+  const name_counts = new Map();
+  for (const workspace of available) {
+    const name = getProjectName(workspace.path);
+    name_counts.set(name, (name_counts.get(name) || 0) + 1);
+  }
+
+  /** @type {Array<{ workspace: WorkspaceInfo, label: string }>} */
+  const with_labels = [];
+  for (const workspace of available) {
+    const name = getProjectName(workspace.path);
+    const count = name_counts.get(name) || 0;
+    if (count <= 1) {
+      with_labels.push({ workspace, label: name });
+      continue;
+    }
+    const parts = workspace.path.split('/').filter(Boolean);
+    const parent_name = parts.length > 1 ? parts[parts.length - 2] : '';
+    const suffix = parent_name || compactPath(workspace.path);
+    with_labels.push({ workspace, label: `${name} (${suffix})` });
+  }
+
+  /** @type {Map<string, number>} */
+  const label_counts = new Map();
+  for (const item of with_labels) {
+    label_counts.set(item.label, (label_counts.get(item.label) || 0) + 1);
+  }
+
+  return with_labels
+    .map((item) => {
+      const duplicate = (label_counts.get(item.label) || 0) > 1;
+      if (!duplicate) {
+        return item;
+      }
+      return {
+        workspace: item.workspace,
+        label: `${item.label} - ${compactPath(item.workspace.path)}`
+      };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/**
  * Create the workspace picker dropdown component.
  *
  * @param {HTMLElement} mount_element
@@ -70,32 +137,50 @@ export function createWorkspacePicker(mount_element, store, onWorkspaceChange) {
 
     // Show dropdown (even if only one workspace)
     const current_path = current?.path || '';
+    const workspace_options = buildWorkspaceOptions(available);
+    const count_label =
+      available.length === 1 ? '1 workspace' : `${available.length} workspaces`;
+    const current_path_label = compactPath(current_path);
+
     return html`
       <div class="workspace-picker">
-        <select
-          class="workspace-picker__select"
-          @change=${onChange}
-          ?disabled=${is_switching}
-          aria-label="Select project workspace"
-        >
-          ${available.map(
-            (/** @type {WorkspaceInfo} */ ws) => html`
-              <option
-                value="${ws.path}"
-                ?selected=${ws.path === current_path}
-                title="${ws.path}"
-              >
-                ${getProjectName(ws.path)}
-              </option>
-            `
-          )}
-        </select>
-        ${is_switching
-          ? html`<span
-              class="workspace-picker__loading"
-              aria-hidden="true"
-            ></span>`
-          : ''}
+        <div class="workspace-picker__controls">
+          <select
+            class="workspace-picker__select"
+            @change=${onChange}
+            ?disabled=${is_switching}
+            aria-label="Select project workspace"
+          >
+            ${workspace_options.map(
+              (item) => html`
+                <option
+                  value="${item.workspace.path}"
+                  ?selected=${item.workspace.path === current_path}
+                  title="${item.workspace.path}"
+                >
+                  ${item.label}
+                </option>
+              `
+            )}
+          </select>
+          ${is_switching
+            ? html`<span
+                class="workspace-picker__loading"
+                aria-hidden="true"
+              ></span>`
+            : ''}
+        </div>
+        <div class="workspace-picker__meta" title="${current_path}">
+          <span class="workspace-picker__count">${count_label}</span>
+          <span class="workspace-picker__path">${current_path_label}</span>
+        </div>
+        <div class="visually-hidden" aria-live="polite">
+          Current workspace:
+          ${workspace_options
+            .filter((item) => item.workspace.path === current_path)
+            .map((item) => item.label)
+            .join('')}
+        </div>
       </div>
     `;
   }

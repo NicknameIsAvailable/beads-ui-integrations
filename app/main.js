@@ -21,6 +21,7 @@ import { createListView } from './views/list.js';
 import { createTopNav } from './views/nav.js';
 import { createNewIssueDialog } from './views/new-issue-dialog.js';
 import { createWorkspacePicker } from './views/workspace-picker.js';
+import { createWorkspaceManager } from './workspace-manager.js';
 import { createWsClient } from './ws.js';
 
 /**
@@ -223,145 +224,8 @@ export function bootstrap(root_element) {
       ensureTabSubscriptions(store.getState());
     }
 
-    /**
-     * Handle workspace change request from the picker.
-     *
-     * @param {string} workspace_path
-     */
-    async function handleWorkspaceChange(workspace_path) {
-      log('requesting workspace switch to %s', workspace_path);
-      try {
-        const result = await client.send('set-workspace', {
-          path: workspace_path
-        });
-        log('workspace switch result: %o', result);
-        if (result && result.workspace) {
-          // Update state with new workspace
-          store.setState({
-            workspace: {
-              current: {
-                path: result.workspace.root_dir,
-                database: result.workspace.db_path
-              }
-            }
-          });
-          // Persist preference
-          window.localStorage.setItem('beads-ui.workspace', workspace_path);
-          // Clear and resubscribe if workspace actually changed
-          if (result.changed) {
-            await clearAndResubscribe();
-            showToast(
-              'Switched to ' + getProjectName(workspace_path),
-              'success',
-              2000
-            );
-          }
-        }
-      } catch (err) {
-        log('workspace switch failed: %o', err);
-        showToast('Failed to switch workspace', 'error', 3000);
-        throw err;
-      }
-    }
-
-    /**
-     * Extract project name from path.
-     *
-     * @param {string} path
-     * @returns {string}
-     */
-    function getProjectName(path) {
-      if (!path) return 'Unknown';
-      const parts = path.split('/').filter(Boolean);
-      return parts.length > 0 ? parts[parts.length - 1] : 'Unknown';
-    }
-
-    /**
-     * Load available workspaces from server and update state.
-     */
-    async function loadWorkspaces() {
-      try {
-        const result = await client.send('list-workspaces', {});
-        log('workspaces loaded: %o', result);
-        if (result && Array.isArray(result.workspaces)) {
-          const available = result.workspaces.map((/** @type {any} */ ws) => ({
-            path: ws.path,
-            database: ws.database,
-            pid: ws.pid,
-            version: ws.version
-          }));
-          const current = result.current
-            ? {
-                path: result.current.root_dir,
-                database: result.current.db_path
-              }
-            : null;
-          store.setState({ workspace: { current, available } });
-
-          // Check if we have a saved preference that differs from current
-          const savedWorkspace =
-            window.localStorage.getItem('beads-ui.workspace');
-          if (savedWorkspace && current && savedWorkspace !== current.path) {
-            // Check if saved workspace is in available list
-            const savedExists = available.some(
-              (/** @type {{ path: string }} */ ws) => ws.path === savedWorkspace
-            );
-            if (savedExists) {
-              log('restoring saved workspace preference: %s', savedWorkspace);
-              await handleWorkspaceChange(savedWorkspace);
-            }
-          }
-        }
-      } catch (err) {
-        log('failed to load workspaces: %o', err);
-      }
-    }
-
-    /** @type {ReturnType<typeof setTimeout> | null} */
-    let workspaces_reload_timer = null;
-
-    /**
-     * Debounced workspace list refresh to coalesce event bursts.
-     *
-     * @param {number} [delay_ms]
-     */
-    function scheduleWorkspaceReload(delay_ms = 180) {
-      if (workspaces_reload_timer) {
-        clearTimeout(workspaces_reload_timer);
-      }
-      workspaces_reload_timer = setTimeout(() => {
-        workspaces_reload_timer = null;
-        void loadWorkspaces();
-      }, delay_ms);
-      workspaces_reload_timer.unref?.();
-    }
-
-    // Handle workspace-changed events from server (e.g., if another client changes workspace)
-    client.on('workspace-changed', (payload) => {
-      log('workspace-changed event: %o', payload);
-      if (payload && payload.root_dir) {
-        store.setState({
-          workspace: {
-            current: {
-              path: payload.root_dir,
-              database: payload.db_path
-            }
-          }
-        });
-        // Reload workspaces to get fresh list
-        scheduleWorkspaceReload(0);
-        // Clear and resubscribe
-        void clearAndResubscribe();
-      }
-    });
-
-    // Handle workspace list updates (e.g., registry file changed in another project)
-    client.on('workspaces-updated', (payload) => {
-      log('workspaces-updated event: %o', payload);
-      scheduleWorkspaceReload();
-    });
-
-    // --- End workspace management (mounting happens after store is created) ---
+    /** @type {ReturnType<typeof createWorkspaceManager> | null} */
+    let workspace_manager = null;
 
     // Show toasts for WebSocket connectivity changes
     /** @type {boolean} */
@@ -458,6 +322,20 @@ export function bootstrap(root_element) {
     });
     const router = createHashRouter(store);
     router.start();
+
+    workspace_manager = createWorkspaceManager({
+      client,
+      store,
+      log,
+      clearAndResubscribe: clearAndResubscribe,
+      onSwitchSuccess: (workspace_name) => {
+        showToast('Switched to ' + workspace_name, 'success', 2000);
+      },
+      onSwitchError: () => {
+        showToast('Failed to switch workspace', 'error', 3000);
+      }
+    });
+
     /**
      * @param {string} type
      * @param {unknown} payload
@@ -476,11 +354,17 @@ export function bootstrap(root_element) {
 
     // Workspace picker (mount now that store exists)
     const workspace_mount = document.getElementById('workspace-picker');
-    if (workspace_mount) {
-      createWorkspacePicker(workspace_mount, store, handleWorkspaceChange);
+    if (workspace_mount && workspace_manager) {
+      createWorkspacePicker(
+        workspace_mount,
+        store,
+        workspace_manager.handleWorkspaceChange
+      );
     }
     // Load workspaces after WebSocket is connected
-    void loadWorkspaces();
+    if (workspace_manager) {
+      void workspace_manager.loadWorkspaces();
+    }
 
     // Global New Issue dialog (UI-106) mounted at root so it is always visible
     const new_issue_dialog = createNewIssueDialog(
