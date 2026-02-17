@@ -1184,6 +1184,10 @@ export function createApp(config, options = {}) {
     });
     const severity_by_value_id = await fetchYougileSeverityValueMap(client);
     const sticker_value_map = await fetchYougileStickerValueMap(client);
+    const available_columns = await fetchYougileColumnsAll(client);
+    const column_title_by_id = new Map(
+      available_columns.map((column) => [column.id, column.title || ''])
+    );
 
     /** @type {Map<string, YougileTaskInfo>} */
     const tasks_by_id = new Map();
@@ -1201,7 +1205,11 @@ export function createApp(config, options = {}) {
         const task_info = normalizeYougileTaskInfo(
           item,
           yougile.base_url,
-          yougile.company_id || ''
+          yougile.company_id || '',
+          {
+            fallback_column_id: column_id,
+            column_title_by_id
+          }
         );
         if (!task_info) {
           continue;
@@ -1342,7 +1350,7 @@ export function createApp(config, options = {}) {
       return;
     }
     const task_payload = extractYougileTaskPayload(task_result.data);
-    const task_info = normalizeYougileTaskInfo(
+    let task_info = normalizeYougileTaskInfo(
       task_payload,
       yougile.base_url,
       yougile.company_id || ''
@@ -1363,6 +1371,23 @@ export function createApp(config, options = {}) {
         task: { id: task_info.id, title: task_info.title, link: task_info.link }
       });
       return;
+    }
+
+    if (task_info.column_id) {
+      const available_columns = await fetchYougileColumnsAll(client);
+      const column_title_by_id = new Map(
+        available_columns.map((column) => [column.id, column.title || ''])
+      );
+      task_info =
+        normalizeYougileTaskInfo(
+          task_payload,
+          yougile.base_url,
+          yougile.company_id || '',
+          {
+            fallback_column_id: task_info.column_id,
+            column_title_by_id
+          }
+        ) || task_info;
     }
 
     const severity_by_value_id = await fetchYougileSeverityValueMap(client);
@@ -1815,15 +1840,21 @@ function normalizeStickerValueIds(value) {
  * @property {string} link
  * @property {string[]} assigned_ids
  * @property {string[]} sticker_value_ids
+ * @property {string} column_id
+ * @property {string} column_title
  */
 
 /**
  * @param {unknown} task
  * @param {string} base_url
  * @param {string} company_id
+ * @param {{
+ *   fallback_column_id?: string,
+ *   column_title_by_id?: Map<string, string>
+ * }} [options]
  * @returns {YougileTaskInfo | null}
  */
-function normalizeYougileTaskInfo(task, base_url, company_id) {
+function normalizeYougileTaskInfo(task, base_url, company_id, options = {}) {
   const any = /** @type {any} */ (task);
   const id = normalizeYougileId(any.id || any.Id || '');
   if (!id) {
@@ -1841,6 +1872,20 @@ function normalizeYougileTaskInfo(task, base_url, company_id) {
   const sticker_value_ids = normalizeStickerValueIds(
     any.stickers || any.Stickers || {}
   );
+  const parsed_column_id = normalizeYougileId(
+    any.columnId || any.column_id || any.ColumnId || ''
+  );
+  const fallback_column_id = normalizeYougileId(
+    options.fallback_column_id || ''
+  );
+  const column_id = parsed_column_id || fallback_column_id;
+  const parsed_column_title = normalizeYougileTitle(
+    any.columnTitle || any.column_title || any.ColumnTitle || ''
+  );
+  const mapped_column_title = column_id
+    ? normalizeYougileTitle(options.column_title_by_id?.get(column_id) || '')
+    : '';
+  const column_title = parsed_column_title || mapped_column_title;
   return {
     id,
     title,
@@ -1848,7 +1893,9 @@ function normalizeYougileTaskInfo(task, base_url, company_id) {
     body,
     link,
     assigned_ids,
-    sticker_value_ids
+    sticker_value_ids,
+    column_id,
+    column_title
   };
 }
 
@@ -2873,11 +2920,20 @@ export function buildYougileImportDateLabel(imported_at) {
  */
 export function buildYougileImportLabels(task, value_map, import_date_label) {
   const sticker_labels = buildStickerLabels(task, value_map);
+  const source_column_label = buildSourceColumnLabel(task);
   const normalized_date_label = sanitizeLabel(String(import_date_label || ''));
-  if (!normalized_date_label) {
+  if (!normalized_date_label && !source_column_label) {
     return sticker_labels;
   }
-  return Array.from(new Set([...sticker_labels, normalized_date_label]));
+  /** @type {string[]} */
+  const labels = [...sticker_labels];
+  if (source_column_label) {
+    labels.push(source_column_label);
+  }
+  if (normalized_date_label) {
+    labels.push(normalized_date_label);
+  }
+  return Array.from(new Set(labels));
 }
 
 /**
@@ -2887,6 +2943,23 @@ export function buildYougileImportLabels(task, value_map, import_date_label) {
 function sanitizeLabel(label) {
   const sanitized = label.replace(/\\s+/g, ' ').replace(/,/g, ' ').trim();
   return sanitized;
+}
+
+/**
+ * @param {YougileTaskInfo} task
+ * @returns {string}
+ */
+function buildSourceColumnLabel(task) {
+  if (!task || typeof task !== 'object') {
+    return '';
+  }
+  const column_title = sanitizeLabel(String(task.column_title || ''));
+  const column_id = sanitizeLabel(String(task.column_id || ''));
+  const source_value = column_title || column_id;
+  if (!source_value) {
+    return '';
+  }
+  return sanitizeLabel(`yougile-column: ${source_value}`);
 }
 
 /**

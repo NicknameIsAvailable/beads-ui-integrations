@@ -92,7 +92,9 @@ describe('yougile helper functions', () => {
         body: '',
         link: '',
         assigned_ids: [],
-        sticker_value_ids: ['severity_major']
+        sticker_value_ids: ['severity_major'],
+        column_id: '',
+        column_title: ''
       },
       new Map([
         [
@@ -107,5 +109,51 @@ describe('yougile helper functions', () => {
     );
 
     expect(labels).toEqual(['severity: major', 'imported:2026-02-13']);
+  });
+
+  test('adds source column label when column title exists', () => {
+    const labels = buildYougileImportLabels(
+      {
+        id: 'DOC-2',
+        title: 'Task',
+        description: '',
+        body: '',
+        link: '',
+        assigned_ids: [],
+        sticker_value_ids: [],
+        column_id: 'column-1',
+        column_title: 'In Progress'
+      },
+      new Map(),
+      'imported:2026-02-13'
+    );
+
+    expect(labels).toEqual([
+      'yougile-column: In Progress',
+      'imported:2026-02-13'
+    ]);
+  });
+
+  test('falls back to column id in source column label when title is missing', () => {
+    const labels = buildYougileImportLabels(
+      {
+        id: 'DOC-3',
+        title: 'Task',
+        description: '',
+        body: '',
+        link: '',
+        assigned_ids: [],
+        sticker_value_ids: [],
+        column_id: 'column-42',
+        column_title: ''
+      },
+      new Map(),
+      'imported:2026-02-13'
+    );
+
+    expect(labels).toEqual([
+      'yougile-column: column-42',
+      'imported:2026-02-13'
+    ]);
   });
 });
