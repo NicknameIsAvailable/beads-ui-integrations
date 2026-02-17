@@ -29,9 +29,10 @@ import {
  * Create and configure the Express application.
  *
  * @param {{ host: string, port: number, app_dir: string, root_dir: string }} config - Server configuration.
+ * @param {{ onWorkspacesUpdated?: (source: 'register-workspace') => void }} [options]
  * @returns {Express} Configured Express app instance.
  */
-export function createApp(config) {
+export function createApp(config, options = {}) {
   const app = express();
 
   // Basic hardening and config
@@ -1450,6 +1451,11 @@ export function createApp(config) {
       return;
     }
     registerWorkspace({ path: workspace_path, database });
+    try {
+      options.onWorkspacesUpdated?.('register-workspace');
+    } catch {
+      // ignore callback errors
+    }
     res.status(200).json({ ok: true, registered: workspace_path });
   });
 

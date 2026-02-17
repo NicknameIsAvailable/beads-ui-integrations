@@ -4,8 +4,13 @@ import { printServerUrl } from './cli/daemon.js';
 import { getConfig } from './config.js';
 import { resolveDbPath } from './db.js';
 import { debug, enableAllDebug } from './logging.js';
-import { registerWorkspace, watchRegistry } from './registry-watcher.js';
+import {
+  getAvailableWorkspaces,
+  registerWorkspace,
+  watchRegistry
+} from './registry-watcher.js';
 import { watchDb } from './watcher.js';
+import { createWorkspacesUpdatedBroadcaster } from './workspaces-updated.js';
 import { attachWsServer } from './ws.js';
 
 if (process.argv.includes('--debug') || process.argv.includes('-d')) {
@@ -23,7 +28,15 @@ for (let i = 0; i < process.argv.length; i++) {
 }
 
 const config = getConfig();
-const app = createApp(config);
+
+/** @type {(source: 'registry'|'register-workspace') => boolean} */
+let notifyWorkspacesUpdated = () => false;
+
+const app = createApp(config, {
+  onWorkspacesUpdated: () => {
+    notifyWorkspacesUpdated('register-workspace');
+  }
+});
 const server = createServer(app);
 const log = debug('server');
 
@@ -42,7 +55,7 @@ const db_watcher = watchDb(config.root_dir, () => {
   // v2: all updates flow via subscription push envelopes only
 });
 
-const { scheduleListRefresh } = attachWsServer(server, {
+const { broadcast, scheduleListRefresh } = attachWsServer(server, {
   path: '/ws',
   heartbeat_ms: 30000,
   // Coalesce DB change bursts into one refresh run
@@ -51,14 +64,22 @@ const { scheduleListRefresh } = attachWsServer(server, {
   watcher: db_watcher
 });
 
+notifyWorkspacesUpdated = createWorkspacesUpdatedBroadcaster({
+  get_workspaces: getAvailableWorkspaces,
+  broadcast,
+  log
+});
+
 // Watch the global registry for workspace changes (e.g., when user starts
 // bd daemon in a different project). This enables automatic workspace switching.
 watchRegistry(
   (entries) => {
-    log('registry changed: %d entries', entries.length);
-    // Find if there's a newer workspace that matches our initial root
-    // For now, we just log the change - users can switch via set-workspace
-    // Future: could auto-switch if a workspace was started in a parent/child dir
+    const did_broadcast = notifyWorkspacesUpdated('registry');
+    log(
+      'registry changed: %d entries (workspaces-updated=%s)',
+      entries.length,
+      did_broadcast
+    );
   },
   { debounce_ms: 500 }
 );

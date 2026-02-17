@@ -317,6 +317,25 @@ export function bootstrap(root_element) {
       }
     }
 
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let workspaces_reload_timer = null;
+
+    /**
+     * Debounced workspace list refresh to coalesce event bursts.
+     *
+     * @param {number} [delay_ms]
+     */
+    function scheduleWorkspaceReload(delay_ms = 180) {
+      if (workspaces_reload_timer) {
+        clearTimeout(workspaces_reload_timer);
+      }
+      workspaces_reload_timer = setTimeout(() => {
+        workspaces_reload_timer = null;
+        void loadWorkspaces();
+      }, delay_ms);
+      workspaces_reload_timer.unref?.();
+    }
+
     // Handle workspace-changed events from server (e.g., if another client changes workspace)
     client.on('workspace-changed', (payload) => {
       log('workspace-changed event: %o', payload);
@@ -330,10 +349,16 @@ export function bootstrap(root_element) {
           }
         });
         // Reload workspaces to get fresh list
-        void loadWorkspaces();
+        scheduleWorkspaceReload(0);
         // Clear and resubscribe
         void clearAndResubscribe();
       }
+    });
+
+    // Handle workspace list updates (e.g., registry file changed in another project)
+    client.on('workspaces-updated', (payload) => {
+      log('workspaces-updated event: %o', payload);
+      scheduleWorkspaceReload();
     });
 
     // --- End workspace management (mounting happens after store is created) ---

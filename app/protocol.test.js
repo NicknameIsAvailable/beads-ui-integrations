@@ -16,6 +16,7 @@ describe('protocol', () => {
     expect(Array.isArray(MESSAGE_TYPES)).toBe(true);
     expect(MESSAGE_TYPES.length).toBeGreaterThan(3);
     expect(isMessageType('edit-text')).toBe(true);
+    expect(isMessageType('workspaces-updated')).toBe(true);
     expect(isMessageType('unknown-type')).toBe(false);
   });
 
