@@ -91,6 +91,8 @@ describe('main', () => {
 
     expect(code).toBe(0);
     expect(write_mock).toHaveBeenCalled();
+    const output = write_mock.mock.calls.map((c) => String(c[0])).join('');
+    expect(output).toContain('Usage: bdui|bduii');
   });
 
   test('prints version and exits 0 on --version', async () => {

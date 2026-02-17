@@ -5,7 +5,7 @@
  */
 export function printUsage(out_stream) {
   const lines = [
-    'Usage: bdui <command> [options]',
+    'Usage: bdui|bduii <command> [options]',
     '',
     'Commands:',
     '  start       Start the UI server',

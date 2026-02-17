@@ -12,7 +12,8 @@
   "author": "Maximilian Antoni <mail@maxantoni.de>",
   "type": "module",
   "bin": {
-    "bdui": "bin/bdui.js"
+    "bdui": "bin/bdui.js",
+    "bduii": "bin/bduii.js"
   },
   "engines": {
     "node": ">=22"
