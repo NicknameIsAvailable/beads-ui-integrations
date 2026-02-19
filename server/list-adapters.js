@@ -118,12 +118,27 @@ export async function fetchListForSubscription(spec, options = {}) {
   }
 
   try {
-    const res = await runBdJson(args, { cwd: options.cwd });
+    /** @type {string[]} */
+    let used_args = args;
+    let res = await runBdJson(args, { cwd: options.cwd });
+    // UI-tpoo: tolerate older DB schemas by retrying in JSONL mode.
+    if (shouldRetryNoDb(res)) {
+      const fallback_args = args.concat('--no-db');
+      log(
+        'bd failed for %o (args=%o) with schema mismatch; retrying %o',
+        spec,
+        args,
+        fallback_args
+      );
+      const fallback_res = await runBdJson(fallback_args, { cwd: options.cwd });
+      used_args = fallback_args;
+      res = fallback_res;
+    }
     if (!res || res.code !== 0 || !('stdoutJson' in res)) {
       log(
         'bd failed for %o (args=%o) code=%s stderr=%s',
         spec,
-        args,
+        used_args,
         res?.code,
         res?.stderr || ''
       );
@@ -202,6 +217,18 @@ export async function fetchListForSubscription(spec, options = {}) {
       }
     };
   }
+}
+
+/**
+ * @param {{ code: number, stderr?: string } | undefined} result
+ * @returns {boolean}
+ */
+function shouldRetryNoDb(result) {
+  if (!result || result.code === 0) {
+    return false;
+  }
+  const stderr_text = String(result.stderr || '');
+  return /no such column:\s*spec_id/i.test(stderr_text);
 }
 
 /**

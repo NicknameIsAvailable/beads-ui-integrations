@@ -152,6 +152,64 @@ describe('list adapters for subscription types', () => {
     }
   });
 
+  test('retries with --no-db when bd reports missing spec_id column', async () => {
+    /** @type {import('vitest').Mock} */ (runBdJson)
+      .mockResolvedValueOnce({
+        code: 1,
+        stderr:
+          'failed to search issues: sqlite3: SQL logic error: no such column: spec_id'
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdoutJson: [
+          {
+            id: 'UI-1',
+            created_at: '2026-01-01T00:00:00.000Z',
+            updated_at: '2026-01-01T00:00:00.000Z'
+          }
+        ]
+      });
+
+    const res = await fetchListForSubscription({ type: 'closed-issues' });
+
+    expect(runBdJson).toHaveBeenNthCalledWith(
+      1,
+      ['list', '--json', '--status', 'closed'],
+      { cwd: undefined }
+    );
+    expect(runBdJson).toHaveBeenNthCalledWith(
+      2,
+      ['list', '--json', '--status', 'closed', '--no-db'],
+      { cwd: undefined }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.items).toHaveLength(1);
+      expect(res.items[0].id).toBe('UI-1');
+    }
+  });
+
+  test('returns fallback error when --no-db retry also fails', async () => {
+    /** @type {import('vitest').Mock} */ (runBdJson)
+      .mockResolvedValueOnce({
+        code: 1,
+        stderr:
+          'failed to search issues: sqlite3: SQL logic error: no such column: spec_id'
+      })
+      .mockResolvedValueOnce({
+        code: 1,
+        stderr: 'fallback failed'
+      });
+
+    const res = await fetchListForSubscription({ type: 'closed-issues' });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('bd_error');
+      expect(res.error.message).toContain('fallback failed');
+    }
+  });
+
   test('fetchListForSubscription returns error for unknown type', async () => {
     const res = await fetchListForSubscription(
       /** @type {any} */ ({ type: 'unknown' })
