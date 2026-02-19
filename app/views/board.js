@@ -15,6 +15,7 @@ import { createImportDialog } from './import-dialog.js';
  *   status?: 'open'|'in_progress'|'closed',
  *   priority?: number,
  *   issue_type?: string,
+ *   labels?: string[],
  *   created_at?: number,
  *   updated_at?: number,
  *   closed_at?: number
@@ -32,6 +33,9 @@ const COLUMN_STATUS_MAP = {
   'in-progress-col': 'in_progress',
   'closed-col': 'closed'
 };
+
+/** @type {number[]} */
+const PRIORITY_FILTER_OPTIONS = [0, 1, 2, 3, 4];
 
 /**
  * Create the Board view with Blocked, Ready, In progress, Closed.
@@ -64,9 +68,15 @@ export function createBoardView(
   /** @type {IssueLite[]} */
   let list_ready = [];
   /** @type {IssueLite[]} */
+  let list_ready_raw = [];
+  /** @type {IssueLite[]} */
   let list_blocked = [];
   /** @type {IssueLite[]} */
+  let list_blocked_raw = [];
+  /** @type {IssueLite[]} */
   let list_in_progress = [];
+  /** @type {IssueLite[]} */
+  let list_in_progress_raw = [];
   /** @type {IssueLite[]} */
   let list_closed = [];
   /** @type {IssueLite[]} */
@@ -85,23 +95,116 @@ export function createBoardView(
    * @type {'all'|'today'|'3'|'7'}
    */
   let closed_filter_mode = 'all';
+  /** @type {string[]} */
+  let label_filters = [];
+  /** @type {number[]} */
+  let priority_filters = [];
+  /** @type {string} */
+  let created_from = '';
+  /** @type {string} */
+  let created_to = '';
+  let label_dropdown_open = false;
+  let priority_dropdown_open = false;
   if (store) {
     try {
       const s = store.getState();
-      const cf = s && s.board ? String(s.board.closed_filter || 'all') : 'all';
+      const board_state = s && s.board ? s.board : {};
+      const cf = String(board_state.closed_filter || 'all');
       if (cf === 'all' || cf === 'today' || cf === '3' || cf === '7') {
         closed_filter_mode = /** @type {any} */ (cf);
       }
+      label_filters = normalizeLabelFilters(board_state.label_filters);
+      priority_filters = normalizePriorityFilters(board_state.priority_filters);
+      created_from = normalizeDateInputValue(board_state.created_from);
+      created_to = normalizeDateInputValue(board_state.created_to);
     } catch {
       // ignore store init errors
     }
   }
 
   function template() {
+    const available_labels = collectAvailableLabels();
     return html`
       <div class="panel__body board-root">
         <div class="board-toolbar">
           <div class="board-toolbar__title">Board</div>
+          <div class="board-toolbar__filters">
+            <div
+              class="filter-dropdown ${label_dropdown_open ? 'is-open' : ''}"
+            >
+              <button
+                id="board-label-filter-trigger"
+                type="button"
+                class="filter-dropdown__trigger"
+                @click=${toggleLabelDropdown}
+              >
+                ${getDropdownDisplayText(label_filters, 'Labels', (value) =>
+                  String(value)
+                )}
+                <span class="filter-dropdown__arrow">▾</span>
+              </button>
+              <div class="filter-dropdown__menu">
+                ${available_labels.length === 0
+                  ? html`<div class="filter-dropdown__empty">No labels</div>`
+                  : available_labels.map((label_value) =>
+                      labelOptionTemplate(label_value)
+                    )}
+              </div>
+            </div>
+            <div
+              class="filter-dropdown ${priority_dropdown_open ? 'is-open' : ''}"
+            >
+              <button
+                id="board-priority-filter-trigger"
+                type="button"
+                class="filter-dropdown__trigger"
+                @click=${togglePriorityDropdown}
+              >
+                ${getDropdownDisplayText(
+                  priority_filters,
+                  'Priority',
+                  formatPriorityLabel
+                )}
+                <span class="filter-dropdown__arrow">▾</span>
+              </button>
+              <div class="filter-dropdown__menu">
+                ${PRIORITY_FILTER_OPTIONS.map((priority_value) =>
+                  priorityOptionTemplate(priority_value)
+                )}
+              </div>
+            </div>
+            <label class="board-created-filter" for="board-created-from">
+              <span class="visually-hidden">Created from</span>
+              <input
+                id="board-created-from"
+                type="date"
+                title="Created from"
+                .value=${created_from}
+                @change=${onCreatedFromChange}
+              />
+            </label>
+            <label class="board-created-filter" for="board-created-to">
+              <span class="visually-hidden">Created to</span>
+              <input
+                id="board-created-to"
+                type="date"
+                title="Created to"
+                .value=${created_to}
+                @change=${onCreatedToChange}
+              />
+            </label>
+            ${hasActiveBoardFilters()
+              ? html`
+                  <button
+                    type="button"
+                    class="btn board-toolbar__clear-filters"
+                    @click=${clearBoardFilters}
+                  >
+                    Reset filters
+                  </button>
+                `
+              : null}
+          </div>
           <div class="board-toolbar__actions">
             ${selected_ids.size > 0
               ? html`
@@ -137,6 +240,216 @@ export function createBoardView(
         </div>
       </div>
     `;
+  }
+
+  /**
+   * @returns {string[]}
+   */
+  function collectAvailableLabels() {
+    /** @type {Set<string>} */
+    const unique_labels = new Set();
+    for (const selected of label_filters) {
+      unique_labels.add(selected);
+    }
+    const all_items = list_ready_raw.concat(
+      list_blocked_raw,
+      list_in_progress_raw,
+      list_closed_raw
+    );
+    for (const item of all_items) {
+      const labels = Array.isArray(item.labels) ? item.labels : [];
+      for (const label of labels) {
+        const normalized = String(label || '').trim();
+        if (normalized) {
+          unique_labels.add(normalized);
+        }
+      }
+    }
+    return Array.from(unique_labels).sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * @param {string} label_value
+   * @returns {import('lit-html').TemplateResult}
+   */
+  function labelOptionTemplate(label_value) {
+    return html`
+      <label class="filter-dropdown__option">
+        <input
+          type="checkbox"
+          .checked=${label_filters.includes(label_value)}
+          @change=${() => toggleLabelFilter(label_value)}
+        />
+        ${label_value}
+      </label>
+    `;
+  }
+
+  /**
+   * @param {number} priority_value
+   * @returns {import('lit-html').TemplateResult}
+   */
+  function priorityOptionTemplate(priority_value) {
+    return html`
+      <label class="filter-dropdown__option">
+        <input
+          type="checkbox"
+          .checked=${priority_filters.includes(priority_value)}
+          @change=${() => togglePriorityFilter(priority_value)}
+        />
+        ${formatPriorityLabel(priority_value)}
+      </label>
+    `;
+  }
+
+  /**
+   * @param {Array<string|number>} selected_values
+   * @param {string} label
+   * @param {(value: string|number) => string} formatter
+   * @returns {string}
+   */
+  function getDropdownDisplayText(selected_values, label, formatter) {
+    if (selected_values.length === 0) {
+      return `${label}: Any`;
+    }
+    if (selected_values.length === 1) {
+      return `${label}: ${formatter(selected_values[0])}`;
+    }
+    return `${label} (${selected_values.length})`;
+  }
+
+  /**
+   * @param {string|number} value
+   * @returns {string}
+   */
+  function formatPriorityLabel(value) {
+    const numeric = Number(value);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 4) {
+      return 'Unknown';
+    }
+    return `P${numeric}`;
+  }
+
+  /**
+   * @returns {boolean}
+   */
+  function hasActiveBoardFilters() {
+    return (
+      label_filters.length > 0 ||
+      priority_filters.length > 0 ||
+      created_from.length > 0 ||
+      created_to.length > 0
+    );
+  }
+
+  /**
+   * @param {Event} ev
+   * @returns {void}
+   */
+  function toggleLabelDropdown(ev) {
+    ev.stopPropagation();
+    label_dropdown_open = !label_dropdown_open;
+    if (label_dropdown_open) {
+      priority_dropdown_open = false;
+    }
+    doRender();
+  }
+
+  /**
+   * @param {Event} ev
+   * @returns {void}
+   */
+  function togglePriorityDropdown(ev) {
+    ev.stopPropagation();
+    priority_dropdown_open = !priority_dropdown_open;
+    if (priority_dropdown_open) {
+      label_dropdown_open = false;
+    }
+    doRender();
+  }
+
+  /**
+   * @param {string} label_value
+   * @returns {void}
+   */
+  function toggleLabelFilter(label_value) {
+    if (label_filters.includes(label_value)) {
+      label_filters = label_filters.filter((value) => value !== label_value);
+    } else {
+      label_filters = label_filters.concat(label_value);
+    }
+    label_filters = normalizeLabelFilters(label_filters);
+    persistBoardFilters();
+    applyAllFilters();
+    pruneSelection();
+    doRender();
+  }
+
+  /**
+   * @param {number} priority_value
+   * @returns {void}
+   */
+  function togglePriorityFilter(priority_value) {
+    if (priority_filters.includes(priority_value)) {
+      priority_filters = priority_filters.filter(
+        (value) => value !== priority_value
+      );
+    } else {
+      priority_filters = priority_filters.concat(priority_value);
+    }
+    priority_filters = normalizePriorityFilters(priority_filters);
+    persistBoardFilters();
+    applyAllFilters();
+    pruneSelection();
+    doRender();
+  }
+
+  /**
+   * @param {Event} ev
+   * @returns {void}
+   */
+  function onCreatedFromChange(ev) {
+    const input = /** @type {HTMLInputElement} */ (ev.currentTarget);
+    created_from = normalizeDateInputValue(input.value);
+    if (created_to && created_from && created_to < created_from) {
+      created_to = created_from;
+    }
+    persistBoardFilters();
+    applyAllFilters();
+    pruneSelection();
+    doRender();
+  }
+
+  /**
+   * @param {Event} ev
+   * @returns {void}
+   */
+  function onCreatedToChange(ev) {
+    const input = /** @type {HTMLInputElement} */ (ev.currentTarget);
+    created_to = normalizeDateInputValue(input.value);
+    if (created_from && created_to && created_to < created_from) {
+      created_from = created_to;
+    }
+    persistBoardFilters();
+    applyAllFilters();
+    pruneSelection();
+    doRender();
+  }
+
+  /**
+   * @returns {void}
+   */
+  function clearBoardFilters() {
+    label_filters = [];
+    priority_filters = [];
+    created_from = '';
+    created_to = '';
+    label_dropdown_open = false;
+    priority_dropdown_open = false;
+    persistBoardFilters();
+    applyAllFilters();
+    pruneSelection();
+    doRender();
   }
 
   /**
@@ -629,6 +942,24 @@ export function createBoardView(
     import_dialog.open();
   }
 
+  /**
+   * @param {MouseEvent} ev
+   * @returns {void}
+   */
+  function clickOutsideHandler(ev) {
+    const target = /** @type {HTMLElement|null} */ (ev.target);
+    if (target && target.closest('.board-toolbar__filters .filter-dropdown')) {
+      return;
+    }
+    if (label_dropdown_open || priority_dropdown_open) {
+      label_dropdown_open = false;
+      priority_dropdown_open = false;
+      doRender();
+    }
+  }
+
+  document.addEventListener('click', clickOutsideHandler);
+
   // Delegate keyboard handling from mount_element
   mount_element.addEventListener('keydown', (ev) => {
     const target = ev.target;
@@ -831,6 +1162,60 @@ export function createBoardView(
   // Sort helpers centralized in app/data/sort.js
 
   /**
+   * Apply current board-level filters to all columns.
+   *
+   * @returns {void}
+   */
+  function applyAllFilters() {
+    list_ready = applyBoardFilters(list_ready_raw);
+    list_blocked = applyBoardFilters(list_blocked_raw);
+    list_in_progress = applyBoardFilters(list_in_progress_raw);
+    applyClosedFilter();
+  }
+
+  /**
+   * @param {IssueLite[]} items
+   * @returns {IssueLite[]}
+   */
+  function applyBoardFilters(items) {
+    const from_ts = created_from ? dateStringToStartMs(created_from) : null;
+    const to_ts = created_to ? dateStringToEndMs(created_to) : null;
+    return items.filter((item) => {
+      if (label_filters.length > 0) {
+        const item_labels = normalizeLabelFilters(item.labels);
+        const has_match = label_filters.some((label_value) =>
+          item_labels.includes(label_value)
+        );
+        if (!has_match) {
+          return false;
+        }
+      }
+      if (priority_filters.length > 0) {
+        const priority = Number(item.priority);
+        if (
+          !Number.isInteger(priority) ||
+          !priority_filters.includes(priority)
+        ) {
+          return false;
+        }
+      }
+      if (from_ts !== null || to_ts !== null) {
+        const created_at = toTimestamp(item.created_at);
+        if (!Number.isFinite(created_at)) {
+          return false;
+        }
+        if (from_ts !== null && created_at < from_ts) {
+          return false;
+        }
+        if (to_ts !== null && created_at > to_ts) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  /**
    * Recompute closed list from raw using the current filter and sort.
    */
   function applyClosedFilter() {
@@ -839,6 +1224,7 @@ export function createBoardView(
     let items = Array.isArray(list_closed_raw)
       ? list_closed_raw.map((item) => withResolvedClosedAt(item))
       : [];
+    items = applyBoardFilters(items);
     const now = new Date();
     /** @type {number | null} */
     let since_ts = null;
@@ -872,6 +1258,30 @@ export function createBoardView(
   }
 
   /**
+   * Persist board filters in shared store.
+   *
+   * @returns {void}
+   */
+  function persistBoardFilters() {
+    if (!store) {
+      return;
+    }
+    try {
+      store.setState({
+        board: {
+          closed_filter: closed_filter_mode,
+          label_filters: label_filters.slice(),
+          priority_filters: priority_filters.slice(),
+          created_from,
+          created_to
+        }
+      });
+    } catch {
+      // ignore store errors
+    }
+  }
+
+  /**
    * Ensure every closed-card candidate has a stable numeric `closed_at` for
    * filtering/sorting. Some backends provide `status=closed` without `closed_at`.
    *
@@ -895,6 +1305,113 @@ export function createBoardView(
   }
 
   /**
+   * @param {unknown} value
+   * @returns {string[]}
+   */
+  function normalizeLabelFilters(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    /** @type {Set<string>} */
+    const normalized = new Set();
+    for (const item of value) {
+      const text = String(item || '').trim();
+      if (text) {
+        normalized.add(text);
+      }
+    }
+    return Array.from(normalized);
+  }
+
+  /**
+   * @param {unknown} value
+   * @returns {number[]}
+   */
+  function normalizePriorityFilters(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    /** @type {Set<number>} */
+    const normalized = new Set();
+    for (const item of value) {
+      const numeric = Number(item);
+      if (Number.isInteger(numeric) && numeric >= 0 && numeric <= 4) {
+        normalized.add(numeric);
+      }
+    }
+    return Array.from(normalized).sort((a, b) => a - b);
+  }
+
+  /**
+   * @param {unknown} value
+   * @returns {string}
+   */
+  function normalizeDateInputValue(value) {
+    const text = String(value || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      return text;
+    }
+    return '';
+  }
+
+  /**
+   * @param {unknown} value
+   * @returns {number}
+   */
+  function toTimestamp(value) {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : NaN;
+    }
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : NaN;
+    }
+    return NaN;
+  }
+
+  /**
+   * @param {string} date_value
+   * @returns {number}
+   */
+  function dateStringToStartMs(date_value) {
+    const [year_raw, month_raw, day_raw] = date_value.split('-');
+    const year = Number(year_raw);
+    const month = Number(month_raw);
+    const day = Number(day_raw);
+    if (
+      !Number.isInteger(year) ||
+      !Number.isInteger(month) ||
+      !Number.isInteger(day)
+    ) {
+      return NaN;
+    }
+    return new Date(year, month - 1, day, 0, 0, 0, 0).getTime();
+  }
+
+  /**
+   * @param {string} date_value
+   * @returns {number}
+   */
+  function dateStringToEndMs(date_value) {
+    const [year_raw, month_raw, day_raw] = date_value.split('-');
+    const year = Number(year_raw);
+    const month = Number(month_raw);
+    const day = Number(day_raw);
+    if (
+      !Number.isInteger(year) ||
+      !Number.isInteger(month) ||
+      !Number.isInteger(day)
+    ) {
+      return NaN;
+    }
+    return new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
+  }
+
+  /**
    * @param {Event} ev
    */
   function onClosedFilterChange(ev) {
@@ -907,14 +1424,8 @@ export function createBoardView(
         closed_filter_mode = 'all';
       }
       log('closed filter %s', closed_filter_mode);
-      if (store) {
-        try {
-          store.setState({ board: { closed_filter: closed_filter_mode } });
-        } catch {
-          // ignore store errors
-        }
-      }
-      applyClosedFilter();
+      persistBoardFilters();
+      applyAllFilters();
       doRender();
     } catch {
       // ignore
@@ -949,12 +1460,12 @@ export function createBoardView(
         const in_prog_ids = new Set(in_progress.map((i) => i.id));
         const ready = ready_raw.filter((i) => !in_prog_ids.has(i.id));
 
-        list_ready = ready;
-        list_blocked = blocked;
-        list_in_progress = in_progress;
+        list_ready_raw = ready;
+        list_blocked_raw = blocked;
+        list_in_progress_raw = in_progress;
         list_closed_raw = closed;
       }
-      applyClosedFilter();
+      applyAllFilters();
       pruneSelection();
       doRender();
     } catch {
@@ -962,6 +1473,10 @@ export function createBoardView(
       list_blocked = [];
       list_in_progress = [];
       list_closed = [];
+      list_ready_raw = [];
+      list_blocked_raw = [];
+      list_in_progress_raw = [];
+      list_closed_raw = [];
       pruneSelection();
       doRender();
     }
@@ -1053,11 +1568,11 @@ export function createBoardView(
           ready.sort(cmpPriorityThenCreated);
           blocked.sort(cmpPriorityThenCreated);
           in_prog.sort(cmpPriorityThenCreated);
-          list_ready = ready;
-          list_blocked = blocked;
-          list_in_progress = in_prog;
+          list_ready_raw = ready;
+          list_blocked_raw = blocked;
+          list_in_progress_raw = in_prog;
           list_closed_raw = closed;
-          applyClosedFilter();
+          applyAllFilters();
           pruneSelection();
           doRender();
         }
@@ -1067,13 +1582,20 @@ export function createBoardView(
     },
     clear() {
       mount_element.replaceChildren();
+      document.removeEventListener('click', clickOutsideHandler);
       list_ready = [];
+      list_ready_raw = [];
       list_blocked = [];
+      list_blocked_raw = [];
       list_in_progress = [];
+      list_in_progress_raw = [];
       list_closed = [];
+      list_closed_raw = [];
       selected_ids = new Set();
       last_selected_id = null;
       last_selected_column = null;
+      label_dropdown_open = false;
+      priority_dropdown_open = false;
       import_dialog.destroy();
     }
   };

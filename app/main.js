@@ -298,8 +298,14 @@ export function bootstrap(root_element) {
       log('view parse error: %o', err);
     }
     // Load board preferences
-    /** @type {{ closed_filter: 'all'|'today'|'3'|'7' }} */
-    let persistedBoard = { closed_filter: 'all' };
+    /** @type {{ closed_filter: 'all'|'today'|'3'|'7', label_filters: string[], priority_filters: number[], created_from: string, created_to: string }} */
+    let persistedBoard = {
+      closed_filter: 'all',
+      label_filters: [],
+      priority_filters: [],
+      created_from: '',
+      created_to: ''
+    };
     try {
       const raw_board = window.localStorage.getItem('beads-ui.board');
       if (raw_board) {
@@ -309,6 +315,40 @@ export function bootstrap(root_element) {
           if (cf === 'all' || cf === 'today' || cf === '3' || cf === '7') {
             persistedBoard.closed_filter = cf;
           }
+          if (Array.isArray(obj.label_filters)) {
+            /** @type {string[]} */
+            const labels = [];
+            for (const item of obj.label_filters) {
+              const text = String(item || '').trim();
+              if (text.length > 0) {
+                labels.push(text);
+              }
+            }
+            persistedBoard.label_filters = labels;
+          }
+          if (Array.isArray(obj.priority_filters)) {
+            /** @type {Set<number>} */
+            const priorities = new Set();
+            for (const item of obj.priority_filters) {
+              const numeric = Number(item);
+              if (Number.isInteger(numeric) && numeric >= 0 && numeric <= 4) {
+                priorities.add(numeric);
+              }
+            }
+            persistedBoard.priority_filters = Array.from(priorities).sort(
+              (left, right) => left - right
+            );
+          }
+          persistedBoard.created_from =
+            typeof obj.created_from === 'string' &&
+            /^\d{4}-\d{2}-\d{2}$/.test(obj.created_from)
+              ? obj.created_from
+              : '';
+          persistedBoard.created_to =
+            typeof obj.created_to === 'string' &&
+            /^\d{4}-\d{2}-\d{2}$/.test(obj.created_to)
+              ? obj.created_to
+              : '';
         }
       }
     } catch (err) {
@@ -485,7 +525,13 @@ export function bootstrap(root_element) {
     store.subscribe((s) => {
       window.localStorage.setItem(
         'beads-ui.board',
-        JSON.stringify({ closed_filter: s.board.closed_filter })
+        JSON.stringify({
+          closed_filter: s.board.closed_filter,
+          label_filters: s.board.label_filters,
+          priority_filters: s.board.priority_filters,
+          created_from: s.board.created_from,
+          created_to: s.board.created_to
+        })
       );
     });
     void issues_view.load();

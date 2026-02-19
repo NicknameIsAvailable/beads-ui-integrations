@@ -20,8 +20,58 @@ import { debug } from './utils/logging.js';
  */
 
 /**
- * @typedef {{ closed_filter: ClosedFilter }} BoardState
+ * @typedef {{ closed_filter: ClosedFilter, label_filters: string[], priority_filters: number[], created_from: string, created_to: string }} BoardState
  */
+
+/**
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function normalizeBoardLabels(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  /** @type {Set<string>} */
+  const labels_set = new Set();
+  for (const item of value) {
+    const text = String(item || '').trim();
+    if (text) {
+      labels_set.add(text);
+    }
+  }
+  return Array.from(labels_set);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {number[]}
+ */
+function normalizeBoardPriorities(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  /** @type {Set<number>} */
+  const priorities_set = new Set();
+  for (const item of value) {
+    const numeric = Number(item);
+    if (Number.isInteger(numeric) && numeric >= 0 && numeric <= 4) {
+      priorities_set.add(numeric);
+    }
+  }
+  return Array.from(priorities_set).sort((a, b) => a - b);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
+function normalizeBoardDate(value) {
+  const text = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text;
+  }
+  return '';
+}
 
 /**
  * @typedef {Object} WorkspaceInfo
@@ -45,7 +95,7 @@ import { debug } from './utils/logging.js';
  * Create a simple store for application state.
  *
  * @param {Partial<AppState>} [initial]
- * @returns {{ getState: () => AppState, setState: (patch: { selected_id?: string | null, filters?: Partial<Filters>, workspace?: Partial<WorkspaceState> }) => void, subscribe: (fn: (s: AppState) => void) => () => void }}
+ * @returns {{ getState: () => AppState, setState: (patch: { selected_id?: string | null, filters?: Partial<Filters>, board?: Partial<BoardState>, workspace?: Partial<WorkspaceState> }) => void, subscribe: (fn: (s: AppState) => void) => () => void }}
  */
 export function createStore(initial = {}) {
   const log = debug('state');
@@ -66,7 +116,13 @@ export function createStore(initial = {}) {
         initial.board?.closed_filter === '7' ||
         initial.board?.closed_filter === 'today'
           ? initial.board?.closed_filter
-          : 'all'
+          : 'all',
+      label_filters: normalizeBoardLabels(initial.board?.label_filters),
+      priority_filters: normalizeBoardPriorities(
+        initial.board?.priority_filters
+      ),
+      created_from: normalizeBoardDate(initial.board?.created_from),
+      created_to: normalizeBoardDate(initial.board?.created_to)
     },
     workspace: {
       current: initial.workspace?.current ?? null,
@@ -102,7 +158,22 @@ export function createStore(initial = {}) {
         ...state,
         ...patch,
         filters: { ...state.filters, ...(patch.filters || {}) },
-        board: { ...state.board, ...(patch.board || {}) },
+        board: {
+          ...state.board,
+          ...(patch.board || {}),
+          label_filters: normalizeBoardLabels(
+            patch.board?.label_filters ?? state.board.label_filters
+          ),
+          priority_filters: normalizeBoardPriorities(
+            patch.board?.priority_filters ?? state.board.priority_filters
+          ),
+          created_from: normalizeBoardDate(
+            patch.board?.created_from ?? state.board.created_from
+          ),
+          created_to: normalizeBoardDate(
+            patch.board?.created_to ?? state.board.created_to
+          )
+        },
         workspace: {
           current:
             patch.workspace?.current !== undefined
@@ -125,6 +196,12 @@ export function createStore(initial = {}) {
         next.filters.search === state.filters.search &&
         next.filters.type === state.filters.type &&
         next.board.closed_filter === state.board.closed_filter &&
+        JSON.stringify(next.board.label_filters) ===
+          JSON.stringify(state.board.label_filters) &&
+        JSON.stringify(next.board.priority_filters) ===
+          JSON.stringify(state.board.priority_filters) &&
+        next.board.created_from === state.board.created_from &&
+        next.board.created_to === state.board.created_to &&
         !workspace_changed
       ) {
         return;
